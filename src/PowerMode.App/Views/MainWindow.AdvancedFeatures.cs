@@ -514,6 +514,7 @@ public sealed partial class MainWindow
                 await RecordSwitchHistoryAsync(new SwitchHistoryEntry
                 {
                     Timestamp = DateTimeOffset.Now,
+                    OperationKind = "mode-switch",
                     PreviousMode = previousMode,
                     TargetMode = targetMode,
                     Trigger = context.Trigger,

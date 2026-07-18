@@ -505,6 +505,9 @@ public sealed class SwitchHistoryEntry
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.Now;
+    public string OperationKind { get; set; } = "mode-switch";
+    public Guid? RelatedOperationId { get; set; }
+    public bool IsUndo { get; set; }
     public string PreviousMode { get; set; } = string.Empty;
     public string TargetMode { get; set; } = string.Empty;
     public string Trigger { get; set; } = "manual";
@@ -520,7 +523,7 @@ public sealed class SwitchHistoryEntry
 /// Thread-safe JSONL switch history. GetRecentAsync returns newest entries first.
 /// Malformed lines are ignored so one interrupted write cannot hide older history.
 /// </summary>
-public sealed class HistoryStore
+public sealed class HistoryStore : IRecoveryHistory
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileGates =
         new(StringComparer.OrdinalIgnoreCase);
