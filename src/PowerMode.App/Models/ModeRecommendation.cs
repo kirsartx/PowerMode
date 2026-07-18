@@ -8,7 +8,8 @@ public sealed record RecommendationContext(
     IReadOnlyCollection<string> PerformanceProcessNames,
     IReadOnlyCollection<string> RunningProcessNames,
     int LowBatteryThreshold,
-    HardwareCapabilities Capabilities);
+    HardwareCapabilities Capabilities,
+    DateTimeOffset EvaluatedAt);
 
 public sealed record ModeRecommendation(
     string Mode,

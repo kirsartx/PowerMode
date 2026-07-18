@@ -12,7 +12,20 @@ public sealed class ModeRecommendationServiceTests
         PerformanceProcessNames: [],
         RunningProcessNames: [],
         LowBatteryThreshold: 30,
-        Capabilities: HardwareCapabilities.Unknown);
+        Capabilities: HardwareCapabilities.Unknown,
+        EvaluatedAt: new DateTimeOffset(2026, 7, 19, 9, 30, 0, TimeSpan.Zero));
+
+    [Fact]
+    public void Recommend_SameContext_ReturnsEqualCompleteRecommendation()
+    {
+        var context = Context();
+
+        var first = ModeRecommendationService.Recommend(context);
+        var second = ModeRecommendationService.Recommend(context);
+
+        Assert.Equal(first, second);
+        Assert.Equal(context.EvaluatedAt, first.GeneratedAt);
+    }
 
     [Fact]
     public void Recommend_TemperatureProtection_WinsOverPerformanceProcess()
@@ -22,6 +35,22 @@ public sealed class ModeRecommendationServiceTests
             TemperatureProtectionActive = true,
             PerformanceProcessNames = ["game"],
             RunningProcessNames = ["game"]
+        };
+
+        var result = ModeRecommendationService.Recommend(context);
+
+        Assert.Equal("saver", result.Mode);
+        Assert.Contains("温度", result.Reason);
+    }
+
+    [Fact]
+    public void Recommend_TemperatureProtection_WinsOverRemoteProcess()
+    {
+        var context = Context() with
+        {
+            TemperatureProtectionActive = true,
+            RemoteProcessNames = ["Hermes"],
+            RunningProcessNames = ["Hermes"]
         };
 
         var result = ModeRecommendationService.Recommend(context);
@@ -44,6 +73,19 @@ public sealed class ModeRecommendationServiceTests
     }
 
     [Fact]
+    public void Recommend_RemoteProcess_WinsOverPerformanceProcess()
+    {
+        var context = Context() with
+        {
+            RemoteProcessNames = ["Hermes"],
+            PerformanceProcessNames = ["game"],
+            RunningProcessNames = ["Hermes", "game"]
+        };
+
+        Assert.Equal("remote", ModeRecommendationService.Recommend(context).Mode);
+    }
+
+    [Fact]
     public void Recommend_PerformanceProcess_ReturnsHigh()
     {
         var context = Context() with
@@ -58,15 +100,19 @@ public sealed class ModeRecommendationServiceTests
     [Fact]
     public void Recommend_Battery_ReturnsSaver()
     {
-        Assert.Equal("saver",
-            ModeRecommendationService.Recommend(Context() with { OnBattery = true }).Mode);
+        var result = ModeRecommendationService.Recommend(Context() with { OnBattery = true });
+
+        Assert.Equal("saver", result.Mode);
+        Assert.Equal("当前使用电池供电，建议降低功耗", result.Reason);
     }
 
     [Fact]
     public void Recommend_LowBatteryPercentage_ReturnsSaver()
     {
-        Assert.Equal("saver",
-            ModeRecommendationService.Recommend(Context() with { BatteryPercent = 30 }).Mode);
+        var result = ModeRecommendationService.Recommend(Context() with { BatteryPercent = 30 });
+
+        Assert.Equal("saver", result.Mode);
+        Assert.Equal("当前电量较低，建议降低功耗", result.Reason);
     }
 
     [Fact]

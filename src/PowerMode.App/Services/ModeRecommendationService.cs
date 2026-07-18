@@ -15,11 +15,11 @@ public static class ModeRecommendationService
         if (context.PerformanceProcessNames.Any(running.Contains))
             return Result("high", "检测到高负载程序，建议使用高性能", context);
 
-        if (context.OnBattery ||
-            context.BatteryPercent is int percent && percent <= context.LowBatteryThreshold)
-        {
+        if (context.OnBattery)
             return Result("saver", "当前使用电池供电，建议降低功耗", context);
-        }
+
+        if (context.BatteryPercent is int percent && percent <= context.LowBatteryThreshold)
+            return Result("saver", "当前电量较低，建议降低功耗", context);
 
         return Result("balanced", "当前为日常插电场景，建议使用平衡", context);
     }
@@ -32,5 +32,5 @@ public static class ModeRecommendationService
             mode,
             reason,
             context.Capabilities.Battery != CapabilitySupport.Unknown,
-            DateTimeOffset.Now);
+            context.EvaluatedAt);
 }
