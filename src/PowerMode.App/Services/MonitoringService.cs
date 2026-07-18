@@ -630,21 +630,20 @@ public sealed class MonitoringService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         const string command =
+            "$ErrorActionPreference='Stop';try{" +
             "$value=Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness " +
-            "-ErrorAction SilentlyContinue | Select-Object -First 1;" +
-            "if($null -ne $value){'supported'}";
+            "-ErrorAction Stop | Select-Object -First 1;" +
+            "if($null -eq $value){'unsupported'}else{'supported'}" +
+            "}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}";
         var result = await RunProcessAsync(
             "powershell.exe",
             ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
             ProbeTimeout,
             cancellationToken).ConfigureAwait(false);
-        if (result.TimedOut)
-            return CapabilitySupport.Unknown;
-        if (result.ExitCode != 0)
-            return CapabilitySupport.Unknown;
-        return result.Output.Contains("supported", StringComparison.OrdinalIgnoreCase)
-            ? CapabilitySupport.Supported
-            : CapabilitySupport.Unsupported;
+        return ClassifyWmiCapabilityProbeResult(
+            result.ExitCode,
+            result.TimedOut,
+            result.Output);
     }
 
     internal static async Task<CapabilitySupport> ProbeNvidiaSmiCapabilityAsync(
@@ -670,21 +669,39 @@ public sealed class MonitoringService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         const string command =
+            "$ErrorActionPreference='Stop';try{" +
             "$value=Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature " +
-            "-ErrorAction SilentlyContinue | Select-Object -First 1;" +
-            "if($null -ne $value){'supported'}";
+            "-ErrorAction Stop | Select-Object -First 1;" +
+            "if($null -eq $value){'unsupported'}else{'supported'}" +
+            "}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}";
         var result = await RunProcessAsync(
             "powershell.exe",
             ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
             ProbeTimeout,
             cancellationToken).ConfigureAwait(false);
-        if (result.TimedOut)
+        return ClassifyWmiCapabilityProbeResult(
+            result.ExitCode,
+            result.TimedOut,
+            result.Output);
+    }
+
+    internal static CapabilitySupport ClassifyWmiCapabilityProbeResult(
+        int exitCode,
+        bool timedOut,
+        string output)
+    {
+        if (timedOut || exitCode != 0)
             return CapabilitySupport.Unknown;
-        if (result.ExitCode != 0)
-            return CapabilitySupport.Unknown;
-        return result.Output.Contains("supported", StringComparison.OrdinalIgnoreCase)
-            ? CapabilitySupport.Supported
-            : CapabilitySupport.Unsupported;
+        foreach (var line in output.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.Equals("supported", StringComparison.OrdinalIgnoreCase))
+                return CapabilitySupport.Supported;
+            if (line.Equals("unsupported", StringComparison.OrdinalIgnoreCase))
+                return CapabilitySupport.Unsupported;
+        }
+        return CapabilitySupport.Unknown;
     }
 
     private static bool TryReadCpuTimes(out CpuTimes times)

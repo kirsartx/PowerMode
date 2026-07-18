@@ -78,3 +78,86 @@ longer holds up the aggregate result, and its late fault is observed.
 - A third-party fake probe that ignores cancellation can continue in the background after the caller
   receives `Unknown`; production process-backed probes honor cancellation and kill their child
   processes, and late task faults are observed.
+
+## Independent Review Fixes
+
+Review status changed from `Needs fixes` after the following six isolated RED/GREEN cycles.
+
+### 1. Synchronous probe isolation
+
+- **RED:** `DetectAsync_SynchronouslyBlockingProbe_DoesNotBlockOtherProbesOrCaller` blocked for about
+  two seconds and returned `Supported` after a fake performed `Thread.Sleep` before returning its
+  `Task`.
+- **GREEN:** `SafeProbeAsync` now starts the delegate itself with `Task.Run`, then applies the
+  independent wait budget externally. The focused test returned in 64 ms, preserved
+  `Notifications=Supported`, and degraded only temperature to `Unknown`.
+- **Files:** `HardwareCapabilityService.cs`, `HardwareCapabilityServiceTests.cs`.
+
+### 2. Caller cancellation and cache integrity
+
+- **RED:** `DetectAsync_CallerCancelsWait_DoesNotCacheCanceledResults` expected caller cancellation,
+  but the service swallowed cancellation into an all-`Unknown` cached snapshot.
+- **GREEN:** the cached detection uses the service-lifetime token; each caller independently waits
+  with its own token. A 20 ms canceled caller now receives `OperationCanceledException`, while the
+  same eight-probe detection finishes and a later uncanceled caller receives the supported results.
+- **Files:** `HardwareCapabilityService.cs`, `HardwareCapabilityServiceTests.cs`.
+
+### 3. WMI result classification
+
+- **RED:** six `WindowsCapabilityProbeResultTests` cases failed to compile because the classifier
+  seam did not exist.
+- **GREEN:** one pure `ClassifyWmiCapabilityProbeResult` method distinguishes explicit
+  `supported`, explicit `unsupported`, and all failed/ambiguous outcomes. Brightness and capability
+  temperature scripts use `ErrorAction Stop`, emit an explicit marker on a reliable query, and exit
+  nonzero on provider, permission, RPC, or command failure. The six cases pass.
+- **Files:** `MonitoringService.cs`, `WindowsCapabilityProbeResultTests.cs`.
+
+### 4. Window-close lifetime
+
+- **RED:** lifecycle tests failed to compile because the hardware service was not disposable and no
+  presentation lifetime gate existed.
+- **GREEN:** service disposal cancels in-flight probes and rejects new detection. Main-window closing
+  disposes both detection and presentation lifetimes. The callback checks the closing state before
+  enqueue and again inside `TryApply`; callback exceptions remain inside that safe boundary.
+- **Files:** `HardwareCapabilityService.cs`, `MainWindow.Features.cs`,
+  `CapabilityPresentationLifetimeTests.cs`, `HardwareCapabilityServiceTests.cs`.
+
+### 5. Settings brightness container
+
+- **RED:** `SettingsWindow_BrightnessPresentation_UsesNamedContainer` found no named parent around
+  the title, value, and slider.
+- **GREEN:** `BrightnessSettingsPanel` now owns all three. Simple mode collapses the whole panel;
+  Professional mode leaves it visible with policy ToolTip/automation help, dims the container, and
+  disables the slider.
+- **Files:** `SettingsWindow.xaml`, `SettingsWindow.xaml.cs`,
+  `SettingsCompatibilityTests.cs`.
+
+### 6. Late fault observation race
+
+- **RED:** the source regression test found
+  `catch (OperationCanceledException) when (!probeTask.IsCompleted)`, which could skip observation
+  if completion raced with cancellation.
+- **GREEN:** every cancellation-winner path unconditionally attaches the late observer. The
+  non-cooperative probe test now faults two seconds after the aggregate already returned `Unknown`;
+  the late fault is observed without affecting the caller.
+- **Files:** `HardwareCapabilityService.cs`, `HardwareCapabilityServiceTests.cs`.
+
+## Independent Review Verification
+
+- Hardware service focused:
+  `dotnet test .\tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -p:Platform=x64 --filter "FullyQualifiedName~HardwareCapabilityServiceTests"`
+  — passed 8/8, failed 0, skipped 0.
+- Policy, Settings, WMI classifier, and presentation lifetime:
+  `dotnet test .\tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -p:Platform=x64 --filter "FullyQualifiedName~CapabilityVisibilityPolicyTests|FullyQualifiedName~SettingsCompatibilityTests|FullyQualifiedName~WindowsCapabilityProbeResultTests|FullyQualifiedName~CapabilityPresentationLifetimeTests"`
+  — passed 17/17, failed 0, skipped 0.
+- Full:
+  `dotnet test .\tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -p:Platform=x64`
+  — passed 35/35, failed 0, skipped 0.
+- Release:
+  `dotnet build .\PowerMode.slnx -c Release -p:Platform=x64 --no-restore`
+  — succeeded with 0 warnings and 0 errors.
+- Static:
+  `git diff --check`
+  — clean.
+
+No GUI process was launched during review remediation.

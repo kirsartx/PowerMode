@@ -53,7 +53,9 @@ public sealed partial class SettingsWindow : Window
         HardwareCapabilities capabilities)
     {
         var policy = CapabilityVisibilityPolicy.Evaluate(mode, capabilities);
-        ApplyCapabilityPresentation(BrightnessSlider, policy[CapabilityFeature.Brightness]);
+        var brightness = policy[CapabilityFeature.Brightness];
+        ApplyCapabilityPresentation(BrightnessSettingsPanel, brightness);
+        BrightnessSlider.IsEnabled = brightness.IsEnabled;
         ApplyCapabilityPresentation(BatteryValuesExpander, policy[CapabilityFeature.BatterySettings]);
         ApplyCapabilityPresentation(LowBatteryLabel, policy[CapabilityFeature.BatterySettings]);
         ApplyCapabilityPresentation(LowBatteryBox, policy[CapabilityFeature.BatterySettings]);

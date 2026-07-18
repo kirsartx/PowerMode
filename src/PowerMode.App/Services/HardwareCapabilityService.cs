@@ -15,10 +15,12 @@ public interface IHardwareCapabilityProbe
     Task<CapabilitySupport> SupportsGlobalHotkeysAsync(CancellationToken token);
 }
 
-public sealed class HardwareCapabilityService(IHardwareCapabilityProbe probe)
+public sealed class HardwareCapabilityService(IHardwareCapabilityProbe probe) : IDisposable
 {
     private readonly object _cacheSync = new();
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
     private Task<HardwareCapabilities>? _detection;
+    private bool _disposed;
 
     public Task<HardwareCapabilities> DetectAsync(
         TimeSpan timeout,
@@ -28,7 +30,13 @@ public sealed class HardwareCapabilityService(IHardwareCapabilityProbe probe)
             throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be positive.");
 
         lock (_cacheSync)
-            return _detection ??= DetectCoreAsync(timeout, cancellationToken);
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var detection = _detection ??= DetectCoreAsync(timeout, _lifetimeCancellation.Token);
+            return cancellationToken.CanBeCanceled
+                ? detection.WaitAsync(cancellationToken)
+                : detection;
+        }
     }
 
     private async Task<HardwareCapabilities> DetectCoreAsync(
@@ -74,12 +82,12 @@ public sealed class HardwareCapabilityService(IHardwareCapabilityProbe probe)
         linked.CancelAfter(timeout);
         try
         {
-            var probeTask = probe(linked.Token);
+            var probeTask = Task.Run(() => probe(linked.Token), CancellationToken.None);
             try
             {
                 return await probeTask.WaitAsync(linked.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!probeTask.IsCompleted)
+            catch (OperationCanceledException)
             {
                 _ = ObserveLateCompletionAsync(probeTask);
                 throw;
@@ -105,6 +113,70 @@ public sealed class HardwareCapabilityService(IHardwareCapabilityProbe probe)
         {
             // The bounded caller has already degraded this late result to Unknown.
         }
+    }
+
+    public void Dispose()
+    {
+        lock (_cacheSync)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _lifetimeCancellation.Cancel();
+        }
+    }
+}
+
+internal sealed class CapabilityPresentationLifetime : IDisposable
+{
+    private readonly object _sync = new();
+    private readonly CancellationTokenSource _cancellation = new();
+    private bool _closed;
+
+    public CancellationToken Token => _cancellation.Token;
+
+    public bool IsClosing
+    {
+        get
+        {
+            lock (_sync)
+                return _closed;
+        }
+    }
+
+    public bool TryApply(Action action)
+    {
+        lock (_sync)
+        {
+            if (_closed)
+                return false;
+            try
+            {
+                action();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    public void Close()
+    {
+        lock (_sync)
+        {
+            if (_closed)
+                return;
+            _closed = true;
+            _cancellation.Cancel();
+        }
+    }
+
+    public void Dispose()
+    {
+        Close();
+        _cancellation.Dispose();
     }
 }
 

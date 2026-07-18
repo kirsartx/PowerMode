@@ -31,6 +31,7 @@ public sealed partial class MainWindow
     private bool _globalHotkeysAvailable;
     private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
     private HardwareCapabilityService? _hardwareCapabilityService;
+    private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
 
     internal HardwareCapabilities HardwareCapabilities => _hardwareCapabilities;
 
@@ -100,6 +101,8 @@ public sealed partial class MainWindow
     }
     private void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender,Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
+        _capabilityPresentationLifetime.Dispose();
+        _hardwareCapabilityService?.Dispose();
         DpiAwareWindowSizer.SavePlacement(this);
         if(_featureSettings.RestorePlanOnExit&&!string.IsNullOrEmpty(_startupPlanGuid)){try{using var p=Process.Start(new ProcessStartInfo("powercfg.exe",$"/setactive {_startupPlanGuid}"){UseShellExecute=false,CreateNoWindow=true});p?.WaitForExit(2500);}catch{}}
         CleanupNativeFeatures();
@@ -190,13 +193,18 @@ public sealed partial class MainWindow
         try
         {
             var capabilities=await Task
-                .Run(()=>_hardwareCapabilityService.DetectAsync(TimeSpan.FromSeconds(2)))
+                .Run(()=>_hardwareCapabilityService.DetectAsync(
+                    TimeSpan.FromSeconds(2),_capabilityPresentationLifetime.Token))
                 .ConfigureAwait(false);
             void Apply()
             {
-                _hardwareCapabilities=capabilities;
-                ApplyCapabilityPresentation();
+                _capabilityPresentationLifetime.TryApply(()=>
+                {
+                    _hardwareCapabilities=capabilities;
+                    ApplyCapabilityPresentation();
+                });
             }
+            if(_capabilityPresentationLifetime.IsClosing)return;
             if(DispatcherQueue.HasThreadAccess)Apply();
             else DispatcherQueue.TryEnqueue(Apply);
         }

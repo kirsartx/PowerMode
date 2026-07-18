@@ -24,19 +24,42 @@ public sealed class HardwareCapabilityServiceTests
     [Fact]
     public async Task DetectAsync_SlowProbe_TimesOutAsUnknownWithoutDelayingFastResults()
     {
-        var service = new HardwareCapabilityService(new FakeProbe
+        var probe = new FakeProbe
         {
             TemperatureMonitoring = CapabilitySupport.Supported,
             TemperatureDelay = TimeSpan.FromSeconds(2),
             IgnoreTemperatureCancellation = true,
+            ThrowAfterTemperatureDelay = true,
             Notifications = CapabilitySupport.Supported
-        });
+        };
+        var service = new HardwareCapabilityService(probe);
         var stopwatch = Stopwatch.StartNew();
 
         var result = await service.DetectAsync(TimeSpan.FromMilliseconds(40));
 
         Assert.Equal(CapabilitySupport.Unknown, result.TemperatureMonitoring);
         Assert.Equal(CapabilitySupport.Supported, result.Notifications);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        await probe.TemperatureFaulted.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task DetectAsync_SynchronouslyBlockingProbe_DoesNotBlockOtherProbesOrCaller()
+    {
+        var probe = new FakeProbe
+        {
+            SynchronousTemperatureDelay = TimeSpan.FromSeconds(2),
+            TemperatureMonitoring = CapabilitySupport.Supported,
+            Notifications = CapabilitySupport.Supported
+        };
+        var service = new HardwareCapabilityService(probe);
+        var stopwatch = Stopwatch.StartNew();
+
+        var result = await service.DetectAsync(TimeSpan.FromMilliseconds(40));
+
+        Assert.Equal(CapabilitySupport.Unknown, result.TemperatureMonitoring);
+        Assert.Equal(CapabilitySupport.Supported, result.Notifications);
+        Assert.True(probe.NotificationsStarted);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
     }
 
@@ -85,6 +108,64 @@ public sealed class HardwareCapabilityServiceTests
         Assert.Equal(8, probe.CallCount);
     }
 
+    [Fact]
+    public async Task DetectAsync_CallerCancelsWait_DoesNotCacheCanceledResults()
+    {
+        var probe = new FakeProbe
+        {
+            ProbeDelay = TimeSpan.FromMilliseconds(120),
+            Battery = CapabilitySupport.Supported,
+            Notifications = CapabilitySupport.Supported
+        };
+        var service = new HardwareCapabilityService(probe);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.DetectAsync(TimeSpan.FromSeconds(1), cancellation.Token));
+        var result = await service.DetectAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(CapabilitySupport.Supported, result.Battery);
+        Assert.Equal(CapabilitySupport.Supported, result.Notifications);
+        Assert.Equal(8, probe.CallCount);
+    }
+
+    [Fact]
+    public async Task Dispose_CancelsRunningProbes_AndRejectsNewDetection()
+    {
+        var probe = new FakeProbe { ProbeDelay = TimeSpan.FromSeconds(10) };
+        var service = new HardwareCapabilityService(probe);
+        var detection = service.DetectAsync(TimeSpan.FromSeconds(20));
+        await probe.AllProbesStarted.WaitAsync(TimeSpan.FromSeconds(1));
+
+        service.Dispose();
+
+        await probe.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+        await detection;
+        Assert.Throws<ObjectDisposedException>(
+            () => { _ = service.DetectAsync(TimeSpan.FromSeconds(1)); });
+    }
+
+    [Fact]
+    public void SafeProbe_LateObservation_IsNotGuardedByRacyCompletionCheck()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Services", "HardwareCapabilityService.cs"));
+
+        Assert.DoesNotContain("when (!probeTask.IsCompleted)", source);
+    }
+
+    private static string FindRepositoryFile(params string[] path)
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "PowerMode.slnx")))
+                return Path.Combine([directory.FullName, .. path]);
+        }
+        throw new DirectoryNotFoundException("Could not locate the PowerMode repository root.");
+    }
+
     private sealed class FakeProbe : IHardwareCapabilityProbe
     {
         private readonly TaskCompletionSource _allProbesStarted =
@@ -101,9 +182,21 @@ public sealed class HardwareCapabilityServiceTests
         public CapabilitySupport GlobalHotkeys { get; init; } = CapabilitySupport.Unknown;
         public bool ThrowForWifi { get; init; }
         public bool IgnoreTemperatureCancellation { get; init; }
+        public bool ThrowAfterTemperatureDelay { get; init; }
         public bool WaitForAllProbes { get; init; }
+        public TimeSpan SynchronousTemperatureDelay { get; init; }
         public TimeSpan TemperatureDelay { get; init; }
+        public TimeSpan ProbeDelay { get; init; }
         public int CallCount => Volatile.Read(ref _callCount);
+        public bool NotificationsStarted { get; private set; }
+        public Task AllProbesStarted => _allProbesStarted.Task;
+        public Task CancellationObserved => _cancellationObserved.Task;
+        public Task TemperatureFaulted => _temperatureFaulted.Task;
+
+        private readonly TaskCompletionSource _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _temperatureFaulted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<CapabilitySupport> HasBatteryAsync(CancellationToken token) =>
             ProbeAsync(Battery, token);
@@ -127,16 +220,26 @@ public sealed class HardwareCapabilityServiceTests
 
         public async Task<CapabilitySupport> HasTemperatureAsync(CancellationToken token)
         {
+            if (SynchronousTemperatureDelay > TimeSpan.Zero)
+                Thread.Sleep(SynchronousTemperatureDelay);
             var result = await ProbeAsync(TemperatureMonitoring, token);
             if (TemperatureDelay > TimeSpan.Zero)
                 await Task.Delay(
                     TemperatureDelay,
                     IgnoreTemperatureCancellation ? CancellationToken.None : token);
+            if (ThrowAfterTemperatureDelay)
+            {
+                _temperatureFaulted.TrySetResult();
+                throw new InvalidOperationException("Late temperature probe failure.");
+            }
             return result;
         }
 
-        public Task<CapabilitySupport> SupportsNotificationsAsync(CancellationToken token) =>
-            ProbeAsync(Notifications, token);
+        public Task<CapabilitySupport> SupportsNotificationsAsync(CancellationToken token)
+        {
+            NotificationsStarted = true;
+            return ProbeAsync(Notifications, token);
+        }
 
         public Task<CapabilitySupport> SupportsGlobalHotkeysAsync(CancellationToken token) =>
             ProbeAsync(GlobalHotkeys, token);
@@ -150,7 +253,20 @@ public sealed class HardwareCapabilityServiceTests
                 _allProbesStarted.TrySetResult();
             if (WaitForAllProbes)
                 await _allProbesStarted.Task.WaitAsync(token);
+            if (ProbeDelay > TimeSpan.Zero)
+            {
+                try
+                {
+                    await Task.Delay(ProbeDelay, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    _cancellationObserved.TrySetResult();
+                    throw;
+                }
+            }
             return result;
         }
+
     }
 }

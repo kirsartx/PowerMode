@@ -16,8 +16,10 @@
                         <TextBlock x:Name="ProfileNameLabel" Text="预设名称" Margin="0,8,0,0"/><TextBox x:Name="ProfileNameBox"/>
                         <TextBlock><Run x:Name="CpuMaxLabel" Text="CPU 上限"/><Run Text="  "/><Run x:Name="CpuMaxValue"/></TextBlock>
                         <Slider x:Name="CpuMaxSlider" Minimum="20" Maximum="100" Value="50" StepFrequency="1" ValueChanged="ProfileSlider_ValueChanged"/>
-                        <TextBlock><Run x:Name="BrightnessLabel" Text="亮度"/><Run Text="  "/><Run x:Name="BrightnessValue"/></TextBlock>
-                        <Slider x:Name="BrightnessSlider" Minimum="10" Maximum="100" Value="50" StepFrequency="5" ValueChanged="ProfileSlider_ValueChanged"/>
+                        <StackPanel x:Name="BrightnessSettingsPanel" Spacing="8">
+                            <TextBlock><Run x:Name="BrightnessLabel" Text="亮度"/><Run Text="  "/><Run x:Name="BrightnessValue"/></TextBlock>
+                            <Slider x:Name="BrightnessSlider" Minimum="10" Maximum="100" Value="50" StepFrequency="5" ValueChanged="ProfileSlider_ValueChanged"/>
+                        </StackPanel>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Spacing="8">
                         <TextBlock x:Name="CpuMinLabel" Text="CPU 最低状态（%）"/><NumberBox x:Name="CpuMinBox" Minimum="0" Maximum="100" Value="5" SpinButtonPlacementMode="Compact"/>
