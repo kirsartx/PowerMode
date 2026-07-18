@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using System.Diagnostics;
 
@@ -22,6 +23,8 @@ public sealed partial class MainWindow
     private bool _handlingTemperature;
     private string _temperatureRestoreMode = "balanced";
     private DateTimeOffset _lastLowBatteryNotification;
+    private RecommendationContext? _recommendationContext;
+    private ModeRecommendation? _currentRecommendation;
 
     private sealed record SwitchRequestContext(
         string Trigger,
@@ -255,6 +258,7 @@ public sealed partial class MainWindow
         {
             _handlingTemperature = true;
             _temperatureProtectionActive = true;
+            await RefreshRecommendationAsync();
             _temperatureRestoreMode = NormalizeMode(_featureSettings.LastMode, "balanced");
             _systemIntegration.Notify(new UserNotification(
                 IsChinese ? "温度保护已触发" : "Temperature protection triggered",
@@ -266,7 +270,10 @@ public sealed partial class MainWindow
                     "saver",
                     new SwitchRequestContext("temperature", $"{temperature:F1} °C ≥ {_featureSettings.TemperatureLimitCelsius:F1} °C", AllowPreview: false));
                 if (!succeeded)
+                {
                     _temperatureProtectionActive = false;
+                    await RefreshRecommendationAsync();
+                }
             }
             finally
             {
@@ -306,6 +313,7 @@ public sealed partial class MainWindow
                 if (succeeded)
                 {
                     _temperatureProtectionActive = false;
+                    await RefreshRecommendationAsync();
                     _systemIntegration.Notify(new UserNotification(
                         IsChinese ? "温度已恢复" : "Temperature recovered",
                         IsChinese ? $"已恢复到 {restoreMode} 模式。" : $"Restored the {restoreMode} mode.",
@@ -576,6 +584,107 @@ public sealed partial class MainWindow
         "high" => T("ModeHigh"),
         _ => mode
     };
+
+    private RecommendationContext CreateRecommendationContext()
+    {
+        RecommendationPowerState powerState;
+        try
+        {
+            var succeeded = Native.GetSystemPowerStatus(out var power);
+            powerState = RecommendationUiLogic.CreatePowerState(
+                succeeded,
+                power.ACLineStatus,
+                power.BatteryLifePercent);
+        }
+        catch
+        {
+            powerState = new RecommendationPowerState(null, null);
+        }
+
+        var runningProcessNames = new List<string>();
+        var runningProcessesAvailable = true;
+        Process[] processes;
+        try
+        {
+            processes = Process.GetProcesses();
+        }
+        catch
+        {
+            processes = [];
+            runningProcessesAvailable = false;
+        }
+
+        foreach (var process in processes)
+        {
+            using (process)
+            {
+                try
+                {
+                    runningProcessNames.Add(process.ProcessName);
+                }
+                catch
+                {
+                    // Processes can exit while their names are being read.
+                }
+            }
+        }
+
+        return RecommendationUiLogic.CreateContext(
+            _featureSettings,
+            _hardwareCapabilities,
+            _temperatureProtectionActive,
+            powerState,
+            runningProcessNames,
+            DateTimeOffset.Now,
+            runningProcessesAvailable);
+    }
+
+    private Task RefreshRecommendationAsync()
+    {
+        var context = CreateRecommendationContext();
+        if (!RecommendationUiLogic.NeedsRefresh(_recommendationContext, context))
+            return Task.CompletedTask;
+
+        _recommendationContext = context;
+        _currentRecommendation = ModeRecommendationService.Recommend(context);
+        RenderRecommendation();
+        return Task.CompletedTask;
+    }
+
+    private void RenderRecommendation()
+    {
+        if (_currentRecommendation is not { } recommendation ||
+            RecommendationTitle is null ||
+            RecommendationReason is null ||
+            ApplyRecommendationButton is null)
+            return;
+
+        var presentation = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            GetModeDisplayName(recommendation.Mode),
+            IsChinese);
+        RecommendationTitle.Text = presentation.Title;
+        RecommendationReason.Text = presentation.Reason;
+        ApplyRecommendationButton.Content = presentation.ApplyText;
+        AutomationProperties.SetName(ApplyRecommendationButton, presentation.ApplyText);
+        AutomationProperties.SetHelpText(ApplyRecommendationButton, recommendation.Reason);
+    }
+
+    private async void ApplyRecommendationButton_Click(
+        object sender,
+        Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        if (_currentRecommendation is not { } recommendation)
+            return;
+
+        var request = RecommendationUiLogic.CreateApplyRequest(recommendation);
+        await RunModeWithContextAsync(
+            request.Mode,
+            new SwitchRequestContext(
+                request.Trigger,
+                request.Reason,
+                AllowPreview: request.AllowPreview));
+    }
 
     private void InsightsButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {

@@ -21,6 +21,7 @@ public sealed partial class MainWindow
     private const uint ModAlt=0x0001,ModControl=0x0002;
     private PowerModeSettings _featureSettings=SettingsStore.Load();
     private DispatcherTimer? _featureTimer;
+    private bool _featureTickInProgress;
     private string _startupPlanGuid=string.Empty,_lastAutoMode=string.Empty;
     private CustomPowerProfile? _lastCustomProfile;
     private bool _customProfileInProgress;
@@ -80,12 +81,23 @@ public sealed partial class MainWindow
         ApplyExperienceMode(settings.ExperienceMode);
         AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
         if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
-        _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;if(settings.AutoSwitchEnabled||settings.RealTimeMonitoringEnabled||settings.TemperatureProtectionEnabled)_featureTimer.Start();
-        _=ConfigureMonitoringAsync();ApplySystemSettings(settings);
+        _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;_featureTimer.Start();
+        _=ConfigureMonitoringAsync();ApplySystemSettings(settings);_=RefreshRecommendationAsync();
     }
     private async void FeatureTimer_Tick(object? sender,object e)
     {
-        if(_busy||_modeSwitchInProgress)return;if(await RunAutomationTickAsync())return;if(_featureSettings.RealTimeMonitoringEnabled&&AppWindow.IsVisible)await RefreshStatusAsync();
+        if(_featureTickInProgress||_busy||_modeSwitchInProgress)return;
+        _featureTickInProgress=true;
+        try
+        {
+            await RefreshRecommendationAsync();
+            if(await RunAutomationTickAsync())return;
+            if(_featureSettings.RealTimeMonitoringEnabled&&AppWindow.IsVisible)await RefreshStatusAsync();
+        }
+        finally
+        {
+            _featureTickInProgress=false;
+        }
     }
     private string DetermineAutomaticMode()
     {
@@ -202,6 +214,7 @@ public sealed partial class MainWindow
                 {
                     _hardwareCapabilities=capabilities;
                     ApplyCapabilityPresentation();
+                    _=RefreshRecommendationAsync();
                 });
             }
             if(_capabilityPresentationLifetime.IsClosing)return;

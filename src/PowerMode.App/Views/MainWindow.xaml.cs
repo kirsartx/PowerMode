@@ -127,6 +127,7 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(SaverButton,_language=="zh"?"切换到低功耗（快捷键 2）":"Switch to Saver (shortcut 2)");
         ToolTipService.SetToolTip(BalancedButton,_language=="zh"?"切换到平衡（快捷键 3）":"Switch to Balanced (shortcut 3)");
         ToolTipService.SetToolTip(HighButton,_language=="zh"?"切换到高性能（快捷键 4）":"Switch to High performance (shortcut 4)");
+        RenderRecommendation();
     }
 
     private static string ReadLanguage()
@@ -259,7 +260,7 @@ public sealed partial class MainWindow : Window
 
     private void SetControlsEnabled(bool enabled, bool includeModeControls = true)
     {
-        if(includeModeControls)foreach(var control in new Control[]{RemoteButton,SaverButton,BalancedButton,HighButton,RemoteCustomButton,RemoteNoWifiButton,CpuSlider,CpuBox})control.IsEnabled=enabled;
+        if(includeModeControls)foreach(var control in new Control[]{RemoteButton,SaverButton,BalancedButton,HighButton,ApplyRecommendationButton,RemoteCustomButton,RemoteNoWifiButton,CpuSlider,CpuBox})control.IsEnabled=enabled;
         foreach(var control in new Control[]{VerifyButton,RepairButton,WifiOnButton,RefreshButton,FeaturesButton,InsightsButton,LanguageButton,AutoQuickToggle,LiveQuickToggle})control.IsEnabled=enabled;
         BusyProgress.Visibility=enabled?Visibility.Collapsed:Visibility.Visible;
         if(enabled)ApplyCapabilityPresentation();

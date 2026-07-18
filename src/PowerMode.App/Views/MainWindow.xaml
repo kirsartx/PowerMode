@@ -65,6 +65,35 @@
                     <StackPanel Spacing="10">
                         <TextBlock x:Name="ModesTitle" Style="{ThemeResource SubtitleTextBlockStyle}"/>
                         <TextBlock x:Name="ModesHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
+                        <Border x:Name="RecommendationCard"
+                                Style="{StaticResource PanelStyle}"
+                                Padding="14"
+                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE946;"
+                                          VerticalAlignment="Center"
+                                          Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                                <StackPanel Grid.Column="1" Spacing="3">
+                                    <TextBlock x:Name="RecommendationTitle"
+                                               Style="{ThemeResource BodyStrongTextBlockStyle}"
+                                               TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="RecommendationReason"
+                                               TextWrapping="Wrap"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               AutomationProperties.LiveSetting="Polite"/>
+                                </StackPanel>
+                                <Button x:Name="ApplyRecommendationButton"
+                                        Grid.Column="2"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Click="ApplyRecommendationButton_Click"/>
+                            </Grid>
+                        </Border>
                         <Grid ColumnSpacing="8" RowSpacing="8">
                             <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
