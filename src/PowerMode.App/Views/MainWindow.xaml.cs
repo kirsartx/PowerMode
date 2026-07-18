@@ -25,7 +25,7 @@ public sealed partial class MainWindow : Window
     {
         ["zh"] = new()
         {
-            ["Subtitle"]="Hermes 远程电源切换器", ["Refresh"]="刷新", ["Language"]="English", ["Features"]="功能中心", ["Insights"]="洞察",
+            ["Subtitle"]="Hermes 远程电源切换器", ["Refresh"]="刷新", ["Language"]="English", ["Features"]="功能中心", ["Insights"]="洞察", ["ExperienceModeAutomation"]="切换简单或专业模式",
             ["LastUpdated"]="更新于 {0}", ["Auto"]="自动", ["Live"]="监控",
             ["Mode"]="当前模式", ["Gpu"]="独显功耗", ["Power"]="供电", ["Cpu"]="CPU 上限", ["Brightness"]="亮度", ["Sleep"]="关屏 / 睡眠",
             ["Modes"]="模式", ["ModesHint"]="选择预设方案，核心电源方案会立即切换。", ["Remote"]="远程推荐", ["Saver"]="低功耗", ["Balanced"]="平衡", ["High"]="高性能",
@@ -39,7 +39,7 @@ public sealed partial class MainWindow : Window
         },
         ["en"] = new()
         {
-            ["Subtitle"]="Hermes remote power switcher", ["Refresh"]="Refresh", ["Language"]="中文", ["Features"]="Features", ["Insights"]="Insights",
+            ["Subtitle"]="Hermes remote power switcher", ["Refresh"]="Refresh", ["Language"]="中文", ["Features"]="Features", ["Insights"]="Insights", ["ExperienceModeAutomation"]="Switch between Simple and Professional modes",
             ["LastUpdated"]="Updated {0}", ["Auto"]="Auto", ["Live"]="Live",
             ["Mode"]="Current mode", ["Gpu"]="dGPU power", ["Power"]="Power", ["Cpu"]="CPU max", ["Brightness"]="Brightness", ["Sleep"]="Display / sleep",
             ["Modes"]="Modes", ["ModesHint"]="Choose a preset. The core Windows plan switches immediately.", ["Remote"]="Remote", ["Saver"]="Saver", ["Balanced"]="Balanced", ["High"]="High",
@@ -100,7 +100,7 @@ public sealed partial class MainWindow : Window
     {
         SubtitleText.Text=T("Subtitle"); RefreshButtonText.Text=T("Refresh"); FeaturesButtonText.Text=T("Features");InsightsButtonText.Text=T("Insights"); LanguageButton.Content=T("Language");LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
         AutoQuickText.Text=T("Auto");LiveQuickText.Text=T("Live");
-        AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));
+        AutomationProperties.SetName(ExperienceModeButton,T("ExperienceModeAutomation"));AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));
         ModeTitle.Text=T("Mode"); GpuTitle.Text=T("Gpu"); PowerTitle.Text=T("Power"); CpuTitle.Text=T("Cpu"); BrightnessTitle.Text=T("Brightness"); SleepTitle.Text=T("Sleep");
         ModesTitle.Text=T("Modes"); ModesHintText.Text=T("ModesHint"); RemoteButtonText.Text=T("Remote"); SaverButtonText.Text=T("Saver"); BalancedButtonText.Text=T("Balanced"); HighButtonText.Text=T("High");
         RemoteDescription.Text=T("RemoteDesc");SaverDescription.Text=T("SaverDesc");BalancedDescription.Text=T("BalancedDesc");HighDescription.Text=T("HighDesc");

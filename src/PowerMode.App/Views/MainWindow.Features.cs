@@ -33,7 +33,6 @@ public sealed partial class MainWindow
         _hwnd=WinRT.Interop.WindowNative.GetWindowHandle(this);_startupPlanGuid=GetActivePlanGuidFast();
         _subclassProc=WindowSubclassProc;Native.SetWindowSubclass(_hwnd,_subclassProc,1,UIntPtr.Zero);
         RegisterGlobalHotkeys();AddTrayIcon();InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
-        ApplyExperienceMode(_featureSettings.ExperienceMode);
         AppWindow.Changed+=AppWindow_Changed;AppWindow.Closing+=AppWindow_Closing;
     }
 
@@ -66,7 +65,9 @@ public sealed partial class MainWindow
 
     internal void ApplyFeatureSettings(PowerModeSettings settings)
     {
-        _featureSettings=settings;AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
+        _featureSettings=settings;
+        ApplyExperienceMode(settings.ExperienceMode);
+        AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
         if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
         _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;if(settings.AutoSwitchEnabled||settings.RealTimeMonitoringEnabled||settings.TemperatureProtectionEnabled)_featureTimer.Start();
         _=ConfigureMonitoringAsync();ApplySystemSettings(settings);
