@@ -43,6 +43,12 @@
                     <Button x:Name="FeaturesButton" Click="FeaturesButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE713;"/><TextBlock x:Name="FeaturesButtonText"/></StackPanel></Button>
                     <Button x:Name="InsightsButton" Click="InsightsButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D2;"/><TextBlock x:Name="InsightsButtonText"/></StackPanel></Button>
                 </StackPanel>
+                <Button x:Name="RecoveryCenterButton" Click="OpenRecoveryCenterButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE777;"/>
+                        <TextBlock x:Name="RecoveryCenterButtonText"/>
+                    </StackPanel>
+                </Button>
                 <Button x:Name="LanguageButton" Click="LanguageButton_Click"/>
             </StackPanel>
         </Grid>

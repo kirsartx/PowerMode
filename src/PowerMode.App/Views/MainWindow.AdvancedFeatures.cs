@@ -16,6 +16,8 @@ public sealed partial class MainWindow
     private CancellationTokenSource? _modeSwitchCancellation;
     private PowerTelemetrySample? _lastTelemetry;
     private InsightsWindow? _insightsWindow;
+    private RecoveryCenterWindow? _recoveryCenterWindow;
+    private RecoveryService? _recoveryService;
     private long _modeSwitchGeneration;
     private bool _modeSwitchInProgress;
     private bool _advancedFeaturesInitialized;
@@ -32,7 +34,8 @@ public sealed partial class MainWindow
         string Reason = "",
         Guid? RuleId = null,
         string? RuleName = null,
-        bool AllowPreview = true)
+        bool AllowPreview = true,
+        bool RecordHistory = true)
     {
         public static SwitchRequestContext Manual { get; } = new("manual");
     }
@@ -43,6 +46,11 @@ public sealed partial class MainWindow
             return;
 
         _advancedFeaturesInitialized = true;
+        _recoveryService = new RecoveryService(
+            HistoryStore.Default,
+            new ProductionRecoveryBackend(
+                _systemIntegration,
+                () => _featureSettings.ConfigurationBackupCount));
         _systemIntegration.NotificationSink = notification =>
         {
             if (!_featureSettings.NotificationsEnabled)
@@ -112,22 +120,27 @@ public sealed partial class MainWindow
     internal IReadOnlyList<ConfigurationBackupInfo> ListSettingsBackups() =>
         _systemIntegration.ListConfigurationBackups();
 
-    internal async Task<ConfigurationRestoreResult?> RestoreLatestSettingsBackupAsync()
+    internal ConfigurationBackupInfo? GetLatestDistinctSettingsBackup()
     {
         var backups = _systemIntegration.ListConfigurationBackups();
-        ConfigurationBackupInfo? latest;
         try
         {
             var currentHash = File.Exists(SettingsStore.FilePath)
-                ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(SettingsStore.FilePath)))
+                ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    File.ReadAllBytes(SettingsStore.FilePath)))
                 : string.Empty;
-            latest = backups.FirstOrDefault(backup =>
+            return backups.FirstOrDefault(backup =>
                 !string.Equals(backup.Sha256, currentHash, StringComparison.OrdinalIgnoreCase));
         }
         catch
         {
-            latest = backups.FirstOrDefault();
+            return backups.FirstOrDefault();
         }
+    }
+
+    internal async Task<ConfigurationRestoreResult?> RestoreLatestSettingsBackupAsync()
+    {
+        var latest = GetLatestDistinctSettingsBackup();
         if (latest is null)
             return null;
 
@@ -137,8 +150,34 @@ public sealed partial class MainWindow
             createSafetyBackup: true);
         if (result.Succeeded)
             ApplyFeatureSettings(SettingsStore.Load());
+        await GetRecoveryService().RecordConfigurationRestoreAsync(result);
         return result;
     }
+
+    internal Task<SwitchHistoryEntry?> FindLatestUndoableModeOperationAsync() =>
+        GetRecoveryService().FindLatestUndoableAsync();
+
+    internal Task<bool> UndoLatestModeOperationAsync() =>
+        GetRecoveryService().UndoLatestAsync(
+            (mode, _) => RunModeWithContextAsync(
+                mode,
+                new SwitchRequestContext(
+                    "recovery-center",
+                    IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
+                    AllowPreview: false,
+                    RecordHistory: false)),
+            IsChinese ? "撤销最近模式切换" : "Undo latest mode switch");
+
+    internal async Task ResetSettingsDefaultsAsync()
+    {
+        await GetRecoveryService().ResetDefaultsAsync();
+        ApplyFeatureSettings(SettingsStore.Load());
+        await GetRecoveryService().RecordConfigurationResetAsync();
+    }
+
+    private RecoveryService GetRecoveryService() =>
+        _recoveryService ?? throw new InvalidOperationException(
+            "Recovery services are not initialized.");
 
     internal ChargingLimitCapability GetChargingLimitCapability() =>
         _systemIntegration.GetChargingLimitCapability();
@@ -509,7 +548,7 @@ public sealed partial class MainWindow
         finally
         {
             stopwatch.Stop();
-            if (_featureSettings.OperationHistoryEnabled)
+            if (_featureSettings.OperationHistoryEnabled && context.RecordHistory)
             {
                 await RecordSwitchHistoryAsync(new SwitchHistoryEntry
                 {
@@ -740,6 +779,21 @@ public sealed partial class MainWindow
         _insightsWindow.Activate();
     }
 
+    private void OpenRecoveryCenterButton_Click(
+        object sender,
+        Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        if (_recoveryCenterWindow is not null)
+        {
+            _recoveryCenterWindow.Activate();
+            return;
+        }
+
+        _recoveryCenterWindow = new RecoveryCenterWindow(this, IsChinese);
+        _recoveryCenterWindow.Closed += (_, _) => _recoveryCenterWindow = null;
+        _recoveryCenterWindow.Activate();
+    }
+
     private void DisposeAdvancedFeatures()
     {
         if (!_advancedFeaturesInitialized)
@@ -749,6 +803,9 @@ public sealed partial class MainWindow
         try { _modeSwitchCancellation?.Cancel(); } catch { }
         try { _insightsWindow?.Close(); } catch { }
         _insightsWindow = null;
+        try { _recoveryCenterWindow?.Close(); } catch { }
+        _recoveryCenterWindow = null;
+        _recoveryService = null;
         _monitoringService.SampleAvailable -= MonitoringService_SampleAvailable;
         _monitoringService.SamplingFailed -= MonitoringService_SamplingFailed;
         _ = _monitoringService.DisposeAsync();

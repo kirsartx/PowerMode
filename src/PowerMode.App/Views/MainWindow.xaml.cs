@@ -25,7 +25,7 @@ public sealed partial class MainWindow : Window
     {
         ["zh"] = new()
         {
-            ["Subtitle"]="Hermes 远程电源切换器", ["Refresh"]="刷新", ["Language"]="English", ["Features"]="功能中心", ["Insights"]="洞察", ["ExperienceModeAutomation"]="切换简单或专业模式",
+            ["Subtitle"]="Hermes 远程电源切换器", ["Refresh"]="刷新", ["Language"]="English", ["Features"]="功能中心", ["Insights"]="洞察", ["RecoveryCenter"]="恢复", ["ExperienceModeAutomation"]="切换简单或专业模式",
             ["LastUpdated"]="更新于 {0}", ["Auto"]="自动", ["Live"]="监控",
             ["Mode"]="当前模式", ["Gpu"]="独显功耗", ["Power"]="供电", ["Cpu"]="CPU 上限", ["Brightness"]="亮度", ["Sleep"]="关屏 / 睡眠",
             ["Modes"]="模式", ["ModesHint"]="选择预设方案，核心电源方案会立即切换。", ["Remote"]="远程推荐", ["Saver"]="低功耗", ["Balanced"]="平衡", ["High"]="高性能",
@@ -39,7 +39,7 @@ public sealed partial class MainWindow : Window
         },
         ["en"] = new()
         {
-            ["Subtitle"]="Hermes remote power switcher", ["Refresh"]="Refresh", ["Language"]="中文", ["Features"]="Features", ["Insights"]="Insights", ["ExperienceModeAutomation"]="Switch between Simple and Professional modes",
+            ["Subtitle"]="Hermes remote power switcher", ["Refresh"]="Refresh", ["Language"]="中文", ["Features"]="Features", ["Insights"]="Insights", ["RecoveryCenter"]="Recovery", ["ExperienceModeAutomation"]="Switch between Simple and Professional modes",
             ["LastUpdated"]="Updated {0}", ["Auto"]="Auto", ["Live"]="Live",
             ["Mode"]="Current mode", ["Gpu"]="dGPU power", ["Power"]="Power", ["Cpu"]="CPU max", ["Brightness"]="Brightness", ["Sleep"]="Display / sleep",
             ["Modes"]="Modes", ["ModesHint"]="Choose a preset. The core Windows plan switches immediately.", ["Remote"]="Remote", ["Saver"]="Saver", ["Balanced"]="Balanced", ["High"]="High",
@@ -91,7 +91,7 @@ public sealed partial class MainWindow : Window
         RootGrid.Padding=compact?new Thickness(20,18,20,18):new Thickness(28,22,28,22);
         var visibility=compact?Visibility.Collapsed:Visibility.Visible;
         AutoQuickText.Visibility=visibility;LiveQuickText.Visibility=visibility;RefreshButtonText.Visibility=visibility;
-        FeaturesButtonText.Visibility=visibility;InsightsButtonText.Visibility=visibility;
+        FeaturesButtonText.Visibility=visibility;InsightsButtonText.Visibility=visibility;RecoveryCenterButtonText.Visibility=visibility;
     }
 
     internal string T(string key) => _texts[_language].TryGetValue(key, out var value) ? value : key;
@@ -99,9 +99,9 @@ public sealed partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
-        SubtitleText.Text=T("Subtitle"); RefreshButtonText.Text=T("Refresh"); FeaturesButtonText.Text=T("Features");InsightsButtonText.Text=T("Insights"); LanguageButton.Content=T("Language");LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
+        SubtitleText.Text=T("Subtitle"); RefreshButtonText.Text=T("Refresh"); FeaturesButtonText.Text=T("Features");InsightsButtonText.Text=T("Insights");RecoveryCenterButtonText.Text=T("RecoveryCenter"); LanguageButton.Content=T("Language");LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
         AutoQuickText.Text=T("Auto");LiveQuickText.Text=T("Live");
-        AutomationProperties.SetName(ExperienceModeButton,T("ExperienceModeAutomation"));AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));
+        AutomationProperties.SetName(ExperienceModeButton,T("ExperienceModeAutomation"));AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));AutomationProperties.SetName(RecoveryCenterButton,T("RecoveryCenter"));
         ModeTitle.Text=T("Mode"); GpuTitle.Text=T("Gpu"); PowerTitle.Text=T("Power"); CpuTitle.Text=T("Cpu"); BrightnessTitle.Text=T("Brightness"); SleepTitle.Text=T("Sleep");
         ModesTitle.Text=T("Modes"); ModesHintText.Text=T("ModesHint"); RemoteButtonText.Text=T("Remote"); SaverButtonText.Text=T("Saver"); BalancedButtonText.Text=T("Balanced"); HighButtonText.Text=T("High");
         RemoteDescription.Text=T("RemoteDesc");SaverDescription.Text=T("SaverDesc");BalancedDescription.Text=T("BalancedDesc");HighDescription.Text=T("HighDesc");
@@ -120,6 +120,7 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(LiveQuickToggle,_language=="zh"?"定时刷新硬件与电源状态":"Refresh hardware and power status periodically");
         ToolTipService.SetToolTip(FeaturesButton,_language=="zh"?"打开自动化、托盘和保护设置":"Open automation, tray and protection settings");
         ToolTipService.SetToolTip(InsightsButton,_language=="zh"?"查看硬件监控和系统洞察":"View hardware monitoring and system insights");
+        ToolTipService.SetToolTip(RecoveryCenterButton,_language=="zh"?"撤销模式操作或安全恢复配置":"Undo a mode operation or safely restore configuration");
         ToolTipService.SetToolTip(LanguageButton,_language=="zh"?"切换到 English":"Switch to Chinese");
         ToolTipService.SetToolTip(CopyLogButton,_language=="zh"?"复制本次会话日志":"Copy this session log");
         ToolTipService.SetToolTip(ClearLogButton,_language=="zh"?"清空本次会话日志":"Clear this session log");
@@ -261,7 +262,7 @@ public sealed partial class MainWindow : Window
     private void SetControlsEnabled(bool enabled, bool includeModeControls = true)
     {
         if(includeModeControls)foreach(var control in new Control[]{RemoteButton,SaverButton,BalancedButton,HighButton,ApplyRecommendationButton,RemoteCustomButton,RemoteNoWifiButton,CpuSlider,CpuBox})control.IsEnabled=enabled;
-        foreach(var control in new Control[]{VerifyButton,RepairButton,WifiOnButton,RefreshButton,FeaturesButton,InsightsButton,LanguageButton,AutoQuickToggle,LiveQuickToggle})control.IsEnabled=enabled;
+        foreach(var control in new Control[]{VerifyButton,RepairButton,WifiOnButton,RefreshButton,FeaturesButton,InsightsButton,RecoveryCenterButton,LanguageButton,AutoQuickToggle,LiveQuickToggle})control.IsEnabled=enabled;
         BusyProgress.Visibility=enabled?Visibility.Collapsed:Visibility.Visible;
         if(enabled){ApplyCapabilityPresentation();RenderRecommendation();}
     }

@@ -184,6 +184,175 @@ public sealed class RecoveryServiceTests
         Assert.Equal(["backup:before-reset-defaults", "save-defaults"], backend.Calls);
     }
 
+    [Fact]
+    public async Task ResetDefaultsAsync_ProductionBackupFailure_DoesNotSaveDefaults()
+    {
+        var saved = false;
+        var history = new InMemoryRecoveryHistory([]);
+        var backend = new ProductionRecoveryBackend(
+            (_, _) => Task.FromException(new IOException("backup failed")),
+            _ => saved = true);
+        var service = new RecoveryService(history, backend);
+
+        await Assert.ThrowsAsync<IOException>(() => service.ResetDefaultsAsync());
+
+        Assert.False(saved);
+        Assert.Empty(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task ResetDefaultsAsync_ProductionBackendSavesFreshDefaultsAfterSafetyBackup()
+    {
+        var calls = new List<string>();
+        PowerModeSettings? saved = null;
+        var backend = new ProductionRecoveryBackend(
+            (reason, _) =>
+            {
+                calls.Add($"backup:{reason}");
+                return Task.CompletedTask;
+            },
+            settings =>
+            {
+                calls.Add("save-defaults");
+                saved = settings;
+            });
+        var service = new RecoveryService(new InMemoryRecoveryHistory([]), backend);
+
+        await service.ResetDefaultsAsync();
+
+        Assert.Equal(["backup:before-reset-defaults", "save-defaults"], calls);
+        Assert.NotNull(saved);
+        Assert.Equal(ExperienceMode.Simple, saved.ExperienceMode);
+        Assert.Equal("balanced", saved.LastMode);
+    }
+
+    [Fact]
+    public async Task ResetDefaultsAsync_DoesNotRecordResetBeforeCallerAppliesSettings()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+
+        await service.ResetDefaultsAsync();
+
+        Assert.Empty(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task RecordConfigurationResetAsync_UsesExplicitOperationKind()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+
+        await service.RecordConfigurationResetAsync();
+
+        var entry = Assert.Single(history.RecordedEntries);
+        Assert.Equal("configuration-reset", entry.OperationKind);
+        Assert.True(entry.Succeeded);
+        Assert.Equal("recovery-center", entry.Trigger);
+    }
+
+    [Fact]
+    public async Task RecordConfigurationRestoreAsync_UsesExplicitOperationKind()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var result = new ConfigurationRestoreResult(
+            true,
+            "settings.json",
+            "settings.backup.json",
+            null,
+            null);
+
+        await service.RecordConfigurationRestoreAsync(result);
+
+        var entry = Assert.Single(history.RecordedEntries);
+        Assert.Equal("configuration-restore", entry.OperationKind);
+        Assert.True(entry.Succeeded);
+        Assert.Equal("settings.backup.json", entry.TargetMode);
+        Assert.Equal("recovery-center", entry.Trigger);
+    }
+
+    [Fact]
+    public async Task UndoLatestAsync_ExecutesPreviousModeAndRecordsExactlyOneLinkedUndo()
+    {
+        var original = ModeSwitch("balanced", "high");
+        var history = new InMemoryRecoveryHistory([original]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var executedModes = new List<string>();
+
+        var result = await service.UndoLatestAsync(
+            (mode, _) =>
+            {
+                executedModes.Add(mode);
+                return Task.FromResult(true);
+            },
+            "Undo latest mode switch");
+
+        Assert.True(result);
+        Assert.Equal(["balanced"], executedModes);
+        var undo = Assert.Single(history.RecordedEntries);
+        Assert.Equal("mode-undo", undo.OperationKind);
+        Assert.True(undo.IsUndo);
+        Assert.True(undo.Succeeded);
+        Assert.Equal(original.Id, undo.RelatedOperationId);
+        Assert.Equal(original.TargetMode, undo.PreviousMode);
+        Assert.Equal(original.PreviousMode, undo.TargetMode);
+        Assert.Equal("recovery-center", undo.Trigger);
+    }
+
+    [Fact]
+    public async Task UndoLatestAsync_InvokesModePipelineOnCallerSynchronizationContext()
+    {
+        var callerContext = new InlineSynchronizationContext();
+        var originalContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(callerContext);
+        try
+        {
+            var original = ModeSwitch("balanced", "high");
+            var service = new RecoveryService(
+                new AsynchronousRecoveryHistory([original]),
+                new FakeRecoveryBackend());
+
+            await service.UndoLatestAsync(
+                (_, _) =>
+                {
+                    Assert.Same(callerContext, SynchronizationContext.Current);
+                    return Task.FromResult(true);
+                },
+                "Undo latest mode switch");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalContext);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, "balanced", "high", "balanced → high")]
+    [InlineData("", "balanced", "high", "balanced → high")]
+    [InlineData("mode-switch", "balanced", "high", "balanced → high")]
+    [InlineData("mode-undo", "high", "balanced", "Undo · high → balanced")]
+    [InlineData("configuration-restore", "", "", "Configuration restored")]
+    [InlineData("configuration-reset", "", "", "Defaults reset")]
+    [InlineData("future-operation", "", "", "future-operation")]
+    public void RecoveryOperationFormatter_FormatsOldKnownAndUnknownKindsSafely(
+        string? operationKind,
+        string previousMode,
+        string targetMode,
+        string expected)
+    {
+        var entry = new SwitchHistoryEntry
+        {
+            OperationKind = operationKind!,
+            PreviousMode = previousMode,
+            TargetMode = targetMode
+        };
+
+        var result = RecoveryOperationFormatter.FormatOperation(entry, isChinese: false);
+
+        Assert.Equal(expected, result);
+    }
+
     private static SwitchHistoryEntry ModeSwitch(string previousMode, string targetMode) =>
         new()
         {
@@ -197,6 +366,7 @@ public sealed class RecoveryServiceTests
         : IRecoveryHistory
     {
         public int? LastMaximumCount { get; private set; }
+        public List<SwitchHistoryEntry> RecordedEntries { get; } = [];
 
         public Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
             int maximumCount,
@@ -208,8 +378,45 @@ public sealed class RecoveryServiceTests
 
         public Task RecordAsync(
             SwitchHistoryEntry entry,
+            CancellationToken cancellationToken = default)
+        {
+            RecordedEntries.Add(entry);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class AsynchronousRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
+        : IRecoveryHistory
+    {
+        public async Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
+            int maximumCount,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            return [.. entries.Take(maximumCount)];
+        }
+
+        public Task RecordAsync(
+            SwitchHistoryEntry entry,
             CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class InlineSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            var previous = Current;
+            SetSynchronizationContext(this);
+            try
+            {
+                callback(state);
+            }
+            finally
+            {
+                SetSynchronizationContext(previous);
+            }
+        }
     }
 
     private sealed class FakeRecoveryBackend(bool pauseBackup = false) : IRecoveryBackend
