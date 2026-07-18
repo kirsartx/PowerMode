@@ -6,4 +6,5 @@
 dist/
 .superpowers/
 .codex/
+.worktrees/
 *.log
