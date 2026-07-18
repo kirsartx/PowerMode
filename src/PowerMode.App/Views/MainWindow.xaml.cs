@@ -263,7 +263,7 @@ public sealed partial class MainWindow : Window
         if(includeModeControls)foreach(var control in new Control[]{RemoteButton,SaverButton,BalancedButton,HighButton,ApplyRecommendationButton,RemoteCustomButton,RemoteNoWifiButton,CpuSlider,CpuBox})control.IsEnabled=enabled;
         foreach(var control in new Control[]{VerifyButton,RepairButton,WifiOnButton,RefreshButton,FeaturesButton,InsightsButton,LanguageButton,AutoQuickToggle,LiveQuickToggle})control.IsEnabled=enabled;
         BusyProgress.Visibility=enabled?Visibility.Collapsed:Visibility.Visible;
-        if(enabled)ApplyCapabilityPresentation();
+        if(enabled){ApplyCapabilityPresentation();RenderRecommendation();}
     }
 
     private async Task RefreshStatusAsync()

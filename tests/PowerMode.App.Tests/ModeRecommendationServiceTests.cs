@@ -122,6 +122,25 @@ public sealed class ModeRecommendationServiceTests
     }
 
     [Fact]
+    public void Recommend_UnknownPower_ReturnsIncompleteNeutralReason()
+    {
+        var result = ModeRecommendationService.Recommend(Context() with
+        {
+            OnBattery = null,
+            Capabilities = HardwareCapabilities.Unknown with
+            {
+                Battery = CapabilitySupport.Supported
+            }
+        });
+
+        Assert.Equal("balanced", result.Mode);
+        Assert.False(result.IsComplete);
+        Assert.Contains("供电状态未知", result.Reason);
+        Assert.DoesNotContain("插电", result.Reason);
+        Assert.DoesNotContain("使用电池", result.Reason);
+    }
+
+    [Fact]
     public void Recommend_IsCompleteOnlyWhenBatteryCapabilityIsKnown()
     {
         var complete = Context() with
@@ -131,5 +150,38 @@ public sealed class ModeRecommendationServiceTests
 
         Assert.True(ModeRecommendationService.Recommend(complete).IsComplete);
         Assert.False(ModeRecommendationService.Recommend(Context()).IsComplete);
+    }
+
+    [Theory]
+    [InlineData("temperature", RecommendationReasonCode.TemperatureProtection)]
+    [InlineData("remote", RecommendationReasonCode.RemoteProcess)]
+    [InlineData("performance", RecommendationReasonCode.PerformanceProcess)]
+    [InlineData("battery", RecommendationReasonCode.BatteryPower)]
+    [InlineData("low-battery", RecommendationReasonCode.LowBattery)]
+    [InlineData("ac", RecommendationReasonCode.DailyAc)]
+    [InlineData("unknown", RecommendationReasonCode.PowerStateUnknown)]
+    public void Recommend_AssignsStableReasonCode(string scenario, RecommendationReasonCode expected)
+    {
+        var context = Context() with
+        {
+            OnBattery = scenario switch
+            {
+                "battery" => true,
+                "unknown" => null,
+                _ => false
+            },
+            BatteryPercent = scenario == "low-battery" ? 30 : 100,
+            TemperatureProtectionActive = scenario == "temperature",
+            RemoteProcessNames = scenario == "remote" ? ["Hermes"] : [],
+            PerformanceProcessNames = scenario == "performance" ? ["game"] : [],
+            RunningProcessNames = scenario switch
+            {
+                "remote" => ["Hermes"],
+                "performance" => ["game"],
+                _ => []
+            }
+        };
+
+        Assert.Equal(expected, ModeRecommendationService.Recommend(context).ReasonCode);
     }
 }

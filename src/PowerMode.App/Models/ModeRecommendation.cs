@@ -1,7 +1,19 @@
 namespace PowerModeWinUI;
 
+public enum RecommendationReasonCode
+{
+    Unspecified,
+    TemperatureProtection,
+    RemoteProcess,
+    PerformanceProcess,
+    BatteryPower,
+    LowBattery,
+    DailyAc,
+    PowerStateUnknown
+}
+
 public sealed record RecommendationContext(
-    bool OnBattery,
+    bool? OnBattery,
     int? BatteryPercent,
     bool TemperatureProtectionActive,
     IReadOnlyCollection<string> RemoteProcessNames,
@@ -15,4 +27,5 @@ public sealed record ModeRecommendation(
     string Mode,
     string Reason,
     bool IsComplete,
-    DateTimeOffset GeneratedAt);
+    DateTimeOffset GeneratedAt,
+    RecommendationReasonCode ReasonCode = RecommendationReasonCode.Unspecified);

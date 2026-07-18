@@ -9,7 +9,7 @@ public sealed class RecommendationUiLogicTests
 
     private static RecommendationContext Context(
         DateTimeOffset? evaluatedAt = null,
-        bool onBattery = false,
+        bool? onBattery = false,
         int? batteryPercent = 80,
         bool temperatureProtectionActive = false,
         string[]? runningProcessNames = null,
@@ -91,6 +91,7 @@ public sealed class RecommendationUiLogicTests
             DateTimeOffset.Now);
 
         Assert.Equal(CapabilitySupport.Unknown, result.Capabilities.Battery);
+        Assert.Null(result.OnBattery);
         Assert.False(ModeRecommendationService.Recommend(result).IsComplete);
     }
 
@@ -123,6 +124,15 @@ public sealed class RecommendationUiLogicTests
         Assert.False(RecommendationUiLogic.NeedsRefresh(previous, next));
     }
 
+    [Fact]
+    public void NeedsRefresh_UnknownPowerBecomingKnownAc_Refreshes()
+    {
+        var previous = Context(onBattery: null, batteryPercent: null);
+        var next = Context(onBattery: false, batteryPercent: 80);
+
+        Assert.True(RecommendationUiLogic.NeedsRefresh(previous, next));
+    }
+
     [Theory]
     [InlineData("power")]
     [InlineData("threshold")]
@@ -152,9 +162,10 @@ public sealed class RecommendationUiLogicTests
     {
         var recommendation = new ModeRecommendation(
             "balanced",
-            "当前为日常插电场景，建议使用平衡",
+            "legacy raw reason",
             IsComplete: false,
-            DateTimeOffset.Now);
+            DateTimeOffset.Now,
+            RecommendationReasonCode.PowerStateUnknown);
 
         var result = RecommendationUiLogic.CreatePresentation(
             recommendation,
@@ -162,8 +173,52 @@ public sealed class RecommendationUiLogicTests
             isChinese: true);
 
         Assert.Equal("建议：平衡 · 检测中", result.Title);
-        Assert.Equal("信息不完整：当前为日常插电场景，建议使用平衡", result.Reason);
+        Assert.Equal("信息不完整：供电状态未知，暂时建议使用平衡模式", result.Reason);
         Assert.Equal("一键应用", result.ApplyText);
+        Assert.Equal(result.Reason, result.AutomationHelpText);
+    }
+
+    [Fact]
+    public void CreatePresentation_EnglishLocalizesReasonWithoutChineseServiceText()
+    {
+        var recommendation = new ModeRecommendation(
+            "high",
+            "检测到高负载程序，建议使用高性能",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.PerformanceProcess);
+
+        var result = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            modeDisplayName: "High performance",
+            isChinese: false);
+
+        Assert.Equal("Suggested: High performance", result.Title);
+        Assert.Equal("A high-load app is running; High performance is recommended", result.Reason);
+        Assert.Equal(result.Reason, result.AutomationHelpText);
+        Assert.DoesNotMatch("[\u4e00-\u9fff]", result.Reason);
+    }
+
+    [Fact]
+    public void CreatePresentation_EnglishIncompleteReasonIsFullyLocalized()
+    {
+        var recommendation = new ModeRecommendation(
+            "balanced",
+            "供电状态未知，暂时建议使用平衡模式",
+            IsComplete: false,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.PowerStateUnknown);
+
+        var result = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            modeDisplayName: "Balanced",
+            isChinese: false);
+
+        Assert.Equal(
+            "Information incomplete: Power source is unavailable; Balanced is a conservative recommendation",
+            result.Reason);
+        Assert.Equal(result.Reason, result.AutomationHelpText);
+        Assert.DoesNotMatch("[\u4e00-\u9fff]", result.Reason);
     }
 
     [Fact]
@@ -173,13 +228,81 @@ public sealed class RecommendationUiLogicTests
             "high",
             "检测到高负载程序",
             IsComplete: true,
-            DateTimeOffset.Now);
+            DateTimeOffset.Now,
+            RecommendationReasonCode.PerformanceProcess);
+        const string visibleReason =
+            "A high-load app is running; High performance is recommended";
 
-        var result = RecommendationUiLogic.CreateApplyRequest(recommendation);
+        var result = RecommendationUiLogic.CreateApplyRequest(recommendation, visibleReason);
 
         Assert.Equal("high", result.Mode);
         Assert.Equal("recommendation", result.Trigger);
-        Assert.Equal("检测到高负载程序", result.Reason);
+        Assert.Equal(visibleReason, result.Reason);
         Assert.False(result.AllowPreview);
+    }
+
+    [Theory]
+    [InlineData("balanced", "balanced", false, true, false, "当前模式")]
+    [InlineData("balanced", "balanced", false, false, false, "Current mode")]
+    [InlineData("balanced", "saver", true, true, false, "应用中…")]
+    [InlineData("balanced", "saver", true, false, false, "Applying…")]
+    [InlineData("balanced", "saver", false, true, true, "一键应用")]
+    [InlineData("balanced", "saver", false, false, true, "Apply")]
+    public void CreateApplyButtonState_MapsCurrentApplyingAndReadyStates(
+        string recommendationMode,
+        string currentSuccessfulMode,
+        bool isApplying,
+        bool isChinese,
+        bool expectedEnabled,
+        string expectedText)
+    {
+        var recommendation = new ModeRecommendation(
+            recommendationMode,
+            "reason",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.DailyAc);
+
+        var result = RecommendationUiLogic.CreateApplyButtonState(
+            recommendation,
+            currentSuccessfulMode,
+            isApplying,
+            isChinese);
+
+        Assert.Equal(expectedEnabled, result.IsEnabled);
+        Assert.Equal(expectedText, result.Text);
+    }
+
+    [Fact]
+    public async Task RecommendationApplyGate_ConcurrentSecondRequestDoesNotEnterAction()
+    {
+        var gate = new RecommendationApplyGate();
+        var firstEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var actionCalls = 0;
+
+        var first = gate.TryRunAsync(async () =>
+        {
+            Interlocked.Increment(ref actionCalls);
+            firstEntered.SetResult();
+            await releaseFirst.Task;
+        });
+        await firstEntered.Task;
+
+        var second = await gate.TryRunAsync(() =>
+        {
+            Interlocked.Increment(ref actionCalls);
+            return Task.CompletedTask;
+        });
+
+        Assert.False(second);
+        Assert.True(gate.IsEntered);
+        Assert.Equal(1, actionCalls);
+
+        releaseFirst.SetResult();
+        Assert.True(await first);
+        Assert.False(gate.IsEntered);
     }
 }

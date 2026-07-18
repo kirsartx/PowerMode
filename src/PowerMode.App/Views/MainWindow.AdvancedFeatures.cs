@@ -25,6 +25,7 @@ public sealed partial class MainWindow
     private DateTimeOffset _lastLowBatteryNotification;
     private RecommendationContext? _recommendationContext;
     private ModeRecommendation? _currentRecommendation;
+    private readonly RecommendationApplyGate _recommendationApplyGate = new();
 
     private sealed record SwitchRequestContext(
         string Trigger,
@@ -417,6 +418,7 @@ public sealed partial class MainWindow
         var succeeded = false;
         string? error = null;
         _modeSwitchInProgress = true;
+        RenderRecommendation();
         BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
         StatusText.Text = IsChinese
             ? $"正在切换到“{GetModeDisplayName(targetMode)}”…"
@@ -529,6 +531,7 @@ public sealed partial class MainWindow
                 _modeSwitchInProgress = false;
                 Interlocked.CompareExchange(ref _modeSwitchCancellation, null, cancellation);
                 BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                RenderRecommendation();
                 if (succeeded)
                     _ = RefreshStatusAfterModeSwitchAsync(generation);
             }
@@ -663,11 +666,19 @@ public sealed partial class MainWindow
             recommendation,
             GetModeDisplayName(recommendation.Mode),
             IsChinese);
+        var applyState = RecommendationUiLogic.CreateApplyButtonState(
+            recommendation,
+            _featureSettings.LastMode,
+            _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
+            IsChinese);
         RecommendationTitle.Text = presentation.Title;
         RecommendationReason.Text = presentation.Reason;
-        ApplyRecommendationButton.Content = presentation.ApplyText;
-        AutomationProperties.SetName(ApplyRecommendationButton, presentation.ApplyText);
-        AutomationProperties.SetHelpText(ApplyRecommendationButton, recommendation.Reason);
+        ApplyRecommendationButton.Content = applyState.Text;
+        ApplyRecommendationButton.IsEnabled = applyState.IsEnabled;
+        AutomationProperties.SetName(ApplyRecommendationButton, applyState.Text);
+        AutomationProperties.SetHelpText(
+            ApplyRecommendationButton,
+            presentation.AutomationHelpText);
     }
 
     private async void ApplyRecommendationButton_Click(
@@ -677,13 +688,38 @@ public sealed partial class MainWindow
         if (_currentRecommendation is not { } recommendation)
             return;
 
-        var request = RecommendationUiLogic.CreateApplyRequest(recommendation);
-        await RunModeWithContextAsync(
-            request.Mode,
-            new SwitchRequestContext(
-                request.Trigger,
-                request.Reason,
-                AllowPreview: request.AllowPreview));
+        var state = RecommendationUiLogic.CreateApplyButtonState(
+            recommendation,
+            _featureSettings.LastMode,
+            _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
+            IsChinese);
+        if (!state.IsEnabled)
+            return;
+
+        try
+        {
+            await _recommendationApplyGate.TryRunAsync(async () =>
+            {
+                RenderRecommendation();
+                var presentation = RecommendationUiLogic.CreatePresentation(
+                    recommendation,
+                    GetModeDisplayName(recommendation.Mode),
+                    IsChinese);
+                var request = RecommendationUiLogic.CreateApplyRequest(
+                    recommendation,
+                    presentation.Reason);
+                await RunModeWithContextAsync(
+                    request.Mode,
+                    new SwitchRequestContext(
+                        request.Trigger,
+                        request.Reason,
+                        AllowPreview: request.AllowPreview));
+            });
+        }
+        finally
+        {
+            RenderRecommendation();
+        }
     }
 
     private void InsightsButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
