@@ -18,6 +18,19 @@ public sealed class CapabilityVisibilityPolicyTests
     }
 
     [Fact]
+    public void Evaluate_SimpleMode_HidesUnsupportedBrightness()
+    {
+        var capabilities = HardwareCapabilities.Unknown with
+        {
+            BrightnessControl = CapabilitySupport.Unsupported
+        };
+
+        var result = CapabilityVisibilityPolicy.Evaluate(ExperienceMode.Simple, capabilities);
+
+        Assert.False(result[CapabilityFeature.Brightness].IsVisible);
+    }
+
+    [Fact]
     public void Evaluate_ProfessionalMode_DisablesUnsupportedFeatureWithReason()
     {
         var capabilities = HardwareCapabilities.Unknown with

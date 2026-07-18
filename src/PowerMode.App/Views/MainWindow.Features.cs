@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System.ComponentModel;
@@ -27,12 +28,20 @@ public sealed partial class MainWindow
     private IntPtr _hwnd;
     private Native.SubclassProc? _subclassProc;
     private bool _trayAdded;
+    private bool _globalHotkeysAvailable;
+    private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
+    private HardwareCapabilityService? _hardwareCapabilityService;
+
+    internal HardwareCapabilities HardwareCapabilities => _hardwareCapabilities;
 
     private void InitializeFeatures()
     {
         _hwnd=WinRT.Interop.WindowNative.GetWindowHandle(this);_startupPlanGuid=GetActivePlanGuidFast();
         _subclassProc=WindowSubclassProc;Native.SetWindowSubclass(_hwnd,_subclassProc,1,UIntPtr.Zero);
-        RegisterGlobalHotkeys();AddTrayIcon();InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
+        RegisterGlobalHotkeys();AddTrayIcon();
+        _hardwareCapabilityService=new HardwareCapabilityService(new WindowsHardwareCapabilityProbe(
+            ()=>_trayAdded,()=>_globalHotkeysAvailable));
+        InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
         AppWindow.Changed+=AppWindow_Changed;AppWindow.Closing+=AppWindow_Closing;
     }
 
@@ -52,6 +61,7 @@ public sealed partial class MainWindow
             ?(IsChinese?"专业":"Professional")
             :(IsChinese?"简单":"Simple");
         ExperienceModeButton.IsChecked=professional;
+        ApplyCapabilityPresentation();
     }
 
     private void ExperienceModeButton_Click(object sender,RoutedEventArgs e)
@@ -95,7 +105,13 @@ public sealed partial class MainWindow
         CleanupNativeFeatures();
     }
 
-    private void RegisterGlobalHotkeys(){for(var id=1;id<=4;id++)Native.RegisterHotKey(_hwnd,id,ModControl|ModAlt,(uint)(0x30+id));}
+    private void RegisterGlobalHotkeys()
+    {
+        _globalHotkeysAvailable=true;
+        for(var id=1;id<=4;id++)
+            _globalHotkeysAvailable&=Native.RegisterHotKey(
+                _hwnd,id,ModControl|ModAlt,(uint)(0x30+id));
+    }
     private void CleanupNativeFeatures()
     {
         _featureTimer?.Stop();try{_settingsWindow?.Close();}catch{} _settingsWindow=null;for(var id=1;id<=4;id++)Native.UnregisterHotKey(_hwnd,id);if(_trayAdded){var data=CreateTrayData();Native.Shell_NotifyIcon(2,ref data);_trayAdded=false;}if(_subclassProc is not null)Native.RemoveWindowSubclass(_hwnd,_subclassProc,1);DisposeAdvancedFeatures();
@@ -166,6 +182,56 @@ public sealed partial class MainWindow
     private async void RootGrid_KeyDown(object sender,KeyRoutedEventArgs e)
     {
         if(e.Key==VirtualKey.F5){e.Handled=true;if(!_busy)await RefreshStatusAsync();return;}var focused=FocusManager.GetFocusedElement(RootGrid.XamlRoot);if(focused is TextBox or NumberBox)return;var mode=e.Key switch{VirtualKey.Number1 or VirtualKey.NumberPad1=>"remote",VirtualKey.Number2 or VirtualKey.NumberPad2=>"saver",VirtualKey.Number3 or VirtualKey.NumberPad3=>"balanced",VirtualKey.Number4 or VirtualKey.NumberPad4=>"high",_=>string.Empty};if(mode.Length>0){e.Handled=true;await RunModeAsync(mode);}
+    }
+
+    private async Task DetectCapabilitiesAndRefreshPresentationAsync()
+    {
+        if(_hardwareCapabilityService is null)return;
+        try
+        {
+            var capabilities=await Task
+                .Run(()=>_hardwareCapabilityService.DetectAsync(TimeSpan.FromSeconds(2)))
+                .ConfigureAwait(false);
+            void Apply()
+            {
+                _hardwareCapabilities=capabilities;
+                ApplyCapabilityPresentation();
+            }
+            if(DispatcherQueue.HasThreadAccess)Apply();
+            else DispatcherQueue.TryEnqueue(Apply);
+        }
+        catch
+        {
+            // Capability detection is best-effort and must never affect core mode controls.
+        }
+    }
+
+    private void ApplyCapabilityPresentation()
+    {
+        var policy=CapabilityVisibilityPolicy.Evaluate(
+            _featureSettings.ExperienceMode,_hardwareCapabilities);
+        ApplyCapabilityPresentation(
+            GpuStatusCard,policy[CapabilityFeature.GpuTelemetry]);
+        ApplyCapabilityPresentation(
+            BrightnessStatusCard,policy[CapabilityFeature.Brightness]);
+        ApplyCapabilityPresentation(
+            WifiOnButton,policy[CapabilityFeature.WifiControl]);
+        ApplyCapabilityPresentation(
+            RemoteNoWifiButton,policy[CapabilityFeature.WifiControl]);
+        _settingsWindow?.ApplyCapabilityPresentation(
+            _featureSettings.ExperienceMode,_hardwareCapabilities);
+    }
+
+    private static void ApplyCapabilityPresentation(
+        FrameworkElement element,
+        FeaturePresentation presentation)
+    {
+        element.Visibility=presentation.IsVisible?Visibility.Visible:Visibility.Collapsed;
+        if(element is Control control)control.IsEnabled=presentation.IsEnabled;
+        element.Opacity=presentation.IsEnabled?1:0.55;
+        ToolTipService.SetToolTip(
+            element,string.IsNullOrEmpty(presentation.Reason)?null:presentation.Reason);
+        AutomationProperties.SetHelpText(element,presentation.Reason);
     }
 
     private static class Native

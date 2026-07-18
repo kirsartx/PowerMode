@@ -73,6 +73,7 @@ public sealed partial class MainWindow : Window
         _firstActivation = false;
         if (_startHidden) AppWindow.Hide();
         await RefreshStatusAsync();
+        _ = DetectCapabilitiesAndRefreshPresentationAsync();
         if (_featureSettings.ApplyLastModeOnStartup && !string.IsNullOrWhiteSpace(_featureSettings.LastMode))
             await RunModeWithContextAsync(_featureSettings.LastMode,new SwitchRequestContext("startup",AllowPreview:false));
         await RunStartupFeaturesAsync();
@@ -261,6 +262,7 @@ public sealed partial class MainWindow : Window
         if(includeModeControls)foreach(var control in new Control[]{RemoteButton,SaverButton,BalancedButton,HighButton,RemoteCustomButton,RemoteNoWifiButton,CpuSlider,CpuBox})control.IsEnabled=enabled;
         foreach(var control in new Control[]{VerifyButton,RepairButton,WifiOnButton,RefreshButton,FeaturesButton,InsightsButton,LanguageButton,AutoQuickToggle,LiveQuickToggle})control.IsEnabled=enabled;
         BusyProgress.Visibility=enabled?Visibility.Collapsed:Visibility.Visible;
+        if(enabled)ApplyCapabilityPresentation();
     }
 
     private async Task RefreshStatusAsync()

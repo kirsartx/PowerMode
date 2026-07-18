@@ -43,8 +43,52 @@ public sealed partial class SettingsWindow : Window
         ApplyLanguage();
         InitializeRuleEditor();
         LoadSettings();
+        ApplyCapabilityPresentation(settings.ExperienceMode, owner.HardwareCapabilities);
         UpdateVendorInfo();
         Closed += (_, _) => _systemIntegration.Dispose();
+    }
+
+    internal void ApplyCapabilityPresentation(
+        ExperienceMode mode,
+        HardwareCapabilities capabilities)
+    {
+        var policy = CapabilityVisibilityPolicy.Evaluate(mode, capabilities);
+        ApplyCapabilityPresentation(BrightnessSlider, policy[CapabilityFeature.Brightness]);
+        ApplyCapabilityPresentation(BatteryValuesExpander, policy[CapabilityFeature.BatterySettings]);
+        ApplyCapabilityPresentation(LowBatteryLabel, policy[CapabilityFeature.BatterySettings]);
+        ApplyCapabilityPresentation(LowBatteryBox, policy[CapabilityFeature.BatterySettings]);
+        ApplyCapabilityPresentation(
+            TemperatureProtectionToggle,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureLimitLabel,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureLimitBox,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureRecoveryLabel,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureRecoveryBox,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(NotificationsToggle, policy[CapabilityFeature.Notifications]);
+        ApplyCapabilityPresentation(HotkeyHint, policy[CapabilityFeature.GlobalHotkeys]);
+    }
+
+    private static void ApplyCapabilityPresentation(
+        FrameworkElement element,
+        FeaturePresentation presentation)
+    {
+        element.Visibility = presentation.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (element is Control control) control.IsEnabled = presentation.IsEnabled;
+        element.Opacity = presentation.IsEnabled ? 1 : 0.55;
+        ToolTipService.SetToolTip(
+            element,
+            string.IsNullOrEmpty(presentation.Reason) ? null : presentation.Reason);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(
+            element,
+            presentation.Reason);
     }
 
     private void ApplyLanguage()

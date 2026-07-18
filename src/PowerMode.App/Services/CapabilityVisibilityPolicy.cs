@@ -28,7 +28,10 @@ public static class CapabilityVisibilityPolicy
             [CapabilityFeature.ProfessionalSurface] =
                 new(professional, true, string.Empty),
             [CapabilityFeature.BatterySettings] = Present(professional, capabilities.Battery, "未检测到电池"),
-            [CapabilityFeature.Brightness] = Present(true, capabilities.BrightnessControl, "设备不支持内部屏幕亮度控制"),
+            [CapabilityFeature.Brightness] = Present(
+                professional || capabilities.BrightnessControl == CapabilitySupport.Supported,
+                capabilities.BrightnessControl,
+                "设备不支持内部屏幕亮度控制"),
             [CapabilityFeature.GpuTelemetry] = Present(professional, capabilities.NvidiaSmi, "未检测到可用的 NVIDIA 遥测"),
             [CapabilityFeature.WifiControl] = Present(professional, capabilities.WifiControl, "未检测到可控制的 WiFi 适配器"),
             [CapabilityFeature.TemperatureProtection] = Present(professional, capabilities.TemperatureMonitoring, "未检测到受支持的温度传感器"),
