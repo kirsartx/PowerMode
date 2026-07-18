@@ -106,6 +106,68 @@ public sealed class RecoveryServiceTests
     }
 
     [Fact]
+    public async Task FindLatestUndoableAsync_SkipsUnknownAndCustomPreviousModes()
+    {
+        var unknownPrevious = ModeSwitch("unknown", "high");
+        unknownPrevious.Timestamp = new DateTimeOffset(2026, 1, 3, 0, 0, 0, TimeSpan.Zero);
+        var customPrevious = ModeSwitch("profile:Quiet", "balanced");
+        customPrevious.Timestamp = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var eligible = ModeSwitch("remote", "saver");
+        eligible.Timestamp = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var service = new RecoveryService(
+            new InMemoryRecoveryHistory([unknownPrevious, customPrevious, eligible]),
+            new FakeRecoveryBackend());
+
+        var result = await service.FindLatestUndoableAsync();
+
+        Assert.Equal(eligible.Id, result?.Id);
+    }
+
+    [Fact]
+    public async Task FindLatestUndoableAsync_SelectsNewestTimestampFromOldestFirstHistory()
+    {
+        var oldest = ModeSwitch("balanced", "high");
+        oldest.Timestamp = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var newest = ModeSwitch("high", "remote");
+        newest.Timestamp = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var service = new RecoveryService(
+            new InMemoryRecoveryHistory([oldest, newest]),
+            new FakeRecoveryBackend());
+
+        var result = await service.FindLatestUndoableAsync();
+
+        Assert.Equal(newest.Id, result?.Id);
+    }
+
+    [Fact]
+    public async Task FindLatestUndoableAsync_PreservesHistoryOrderWhenTimestampsMatch()
+    {
+        var timestamp = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var first = ModeSwitch("balanced", "high");
+        first.Timestamp = timestamp;
+        var second = ModeSwitch("high", "remote");
+        second.Timestamp = timestamp;
+        var service = new RecoveryService(
+            new InMemoryRecoveryHistory([first, second]),
+            new FakeRecoveryBackend());
+
+        var result = await service.FindLatestUndoableAsync();
+
+        Assert.Equal(first.Id, result?.Id);
+    }
+
+    [Fact]
+    public async Task FindLatestUndoableAsync_RequestsBoundedRecoveryHistoryWindow()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+
+        await service.FindLatestUndoableAsync();
+
+        Assert.Equal(RecoveryService.MaximumRecoveryHistoryEntries, history.LastMaximumCount);
+    }
+
+    [Fact]
     public async Task ResetDefaultsAsync_AwaitsSafetyBackupBeforeSaving()
     {
         var backend = new FakeRecoveryBackend(pauseBackup: true);
@@ -134,10 +196,15 @@ public sealed class RecoveryServiceTests
     private sealed class InMemoryRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
         : IRecoveryHistory
     {
+        public int? LastMaximumCount { get; private set; }
+
         public Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
             int maximumCount,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<SwitchHistoryEntry>>([.. entries.Take(maximumCount)]);
+            CancellationToken cancellationToken = default)
+        {
+            LastMaximumCount = maximumCount;
+            return Task.FromResult<IReadOnlyList<SwitchHistoryEntry>>([.. entries.Take(maximumCount)]);
+        }
 
         public Task RecordAsync(
             SwitchHistoryEntry entry,
