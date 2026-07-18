@@ -43,4 +43,14 @@ public sealed class CapabilityVisibilityPolicyTests
         Assert.True(result[CapabilityFeature.CoreModes].IsVisible);
         Assert.True(result[CapabilityFeature.CoreModes].IsEnabled);
     }
+
+    [Fact]
+    public void Evaluate_SimpleMode_HidesProfessionalSurface()
+    {
+        var result = CapabilityVisibilityPolicy.Evaluate(
+            ExperienceMode.Simple,
+            HardwareCapabilities.Unknown);
+
+        Assert.False(result[CapabilityFeature.ProfessionalSurface].IsVisible);
+    }
 }

@@ -339,7 +339,11 @@ public sealed partial class MainWindow : Window
         {
             var isActive=button==active;
             AutomationProperties.SetItemStatus(button,isActive?(_language=="zh"?"当前模式":"Current mode"):string.Empty);
-            if(isActive){button.Background=new SolidColorBrush(Colors.DodgerBlue);button.Foreground=new SolidColorBrush(Colors.White);}
+            if(isActive)
+            {
+                button.Background=(Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+                button.Foreground=(Brush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"];
+            }
             else{button.ClearValue(Control.BackgroundProperty);button.ClearValue(Control.ForegroundProperty);}
         }
     }
@@ -361,7 +365,7 @@ public sealed partial class MainWindow : Window
     private async void RemoteCustomButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("remote",((int)CpuBox.Value).ToString());
     private async void RemoteNoWifiButton_Click(object sender,RoutedEventArgs e){if(await ConfirmAsync(T("ConfirmNoWifiTitle"),T("ConfirmNoWifi")))await RunModeAsync("remote",((int)CpuBox.Value).ToString(),"nowifi");}
     private async void VerifyButton_Click(object sender,RoutedEventArgs e)=>await VerifyWithSummaryAsync();
-    private async void LanguageButton_Click(object sender,RoutedEventArgs e){var next=_language=="zh"?"en":"zh";var result=await RunCliAsync("lang",next);if(result.ExitCode!=0)return;_language=next;ApplyLanguage();await RefreshStatusAsync();}
+    private async void LanguageButton_Click(object sender,RoutedEventArgs e){var next=_language=="zh"?"en":"zh";var result=await RunCliAsync("lang",next);if(result.ExitCode!=0)return;_language=next;ApplyLanguage();ApplyExperienceMode(_featureSettings.ExperienceMode);await RefreshStatusAsync();}
     private void ClearLogButton_Click(object sender,RoutedEventArgs e){LogBox.Text=string.Empty;_logLineCount=0;UpdateLogStats();}
     private void CopyLogButton_Click(object sender,RoutedEventArgs e){if(string.IsNullOrWhiteSpace(LogBox.Text))return;var package=new Windows.ApplicationModel.DataTransfer.DataPackage();package.SetText(LogBox.Text);Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);StatusText.Text=T("Copied");StatusBar.Severity=InfoBarSeverity.Success;}
     private void CpuSlider_ValueChanged(object sender,RangeBaseValueChangedEventArgs e){if(_syncingCpu||CpuBox is null)return;_syncingCpu=true;CpuBox.Value=Math.Round(e.NewValue);_syncingCpu=false;}

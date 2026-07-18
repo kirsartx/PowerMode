@@ -3,6 +3,7 @@ namespace PowerModeWinUI;
 public enum CapabilityFeature
 {
     CoreModes,
+    ProfessionalSurface,
     BatterySettings,
     Brightness,
     GpuTelemetry,
@@ -24,6 +25,8 @@ public static class CapabilityVisibilityPolicy
         return new Dictionary<CapabilityFeature, FeaturePresentation>
         {
             [CapabilityFeature.CoreModes] = new(true, true, string.Empty),
+            [CapabilityFeature.ProfessionalSurface] =
+                new(professional, true, string.Empty),
             [CapabilityFeature.BatterySettings] = Present(professional, capabilities.Battery, "未检测到电池"),
             [CapabilityFeature.Brightness] = Present(true, capabilities.BrightnessControl, "设备不支持内部屏幕亮度控制"),
             [CapabilityFeature.GpuTelemetry] = Present(professional, capabilities.NvidiaSmi, "未检测到可用的 NVIDIA 遥测"),

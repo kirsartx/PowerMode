@@ -33,7 +33,35 @@ public sealed partial class MainWindow
         _hwnd=WinRT.Interop.WindowNative.GetWindowHandle(this);_startupPlanGuid=GetActivePlanGuidFast();
         _subclassProc=WindowSubclassProc;Native.SetWindowSubclass(_hwnd,_subclassProc,1,UIntPtr.Zero);
         RegisterGlobalHotkeys();AddTrayIcon();InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
+        ApplyExperienceMode(_featureSettings.ExperienceMode);
         AppWindow.Changed+=AppWindow_Changed;AppWindow.Closing+=AppWindow_Closing;
+    }
+
+    private void ApplyExperienceMode(ExperienceMode mode)
+    {
+        _featureSettings.ExperienceMode=mode;
+        var professional=mode==ExperienceMode.Professional;
+        ProfessionalQuickActions.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        ProfessionalModeControls.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        ProfessionalLogPanel.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        MainContentGrid.ColumnSpacing=professional?16:0;
+        MainContentGrid.ColumnDefinitions[0].Width=
+            professional?new GridLength(390):new GridLength(1,GridUnitType.Star);
+        MainContentGrid.ColumnDefinitions[1].Width=
+            professional?new GridLength(1,GridUnitType.Star):new GridLength(0);
+        ExperienceModeText.Text=professional
+            ?(IsChinese?"专业":"Professional")
+            :(IsChinese?"简单":"Simple");
+        ExperienceModeButton.IsChecked=professional;
+    }
+
+    private void ExperienceModeButton_Click(object sender,RoutedEventArgs e)
+    {
+        var mode=ExperienceModeButton.IsChecked==true
+            ?ExperienceMode.Professional
+            :ExperienceMode.Simple;
+        ApplyExperienceMode(mode);
+        SettingsStore.Save(_featureSettings);
     }
 
     internal void ApplyFeatureSettings(PowerModeSettings settings)

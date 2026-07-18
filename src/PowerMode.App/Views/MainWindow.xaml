@@ -28,11 +28,21 @@
                 </StackPanel>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                <ToggleButton x:Name="AutoQuickToggle" Click="AutoQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE945;"/><TextBlock x:Name="AutoQuickText"/></StackPanel></ToggleButton>
-                <ToggleButton x:Name="LiveQuickToggle" Click="LiveQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D9;"/><TextBlock x:Name="LiveQuickText"/></StackPanel></ToggleButton>
-                <Button x:Name="RefreshButton" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;"/><ProgressRing x:Name="RefreshProgressRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="RefreshButtonText"/></StackPanel></Button>
-                <Button x:Name="FeaturesButton" Click="FeaturesButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE713;"/><TextBlock x:Name="FeaturesButtonText"/></StackPanel></Button>
-                <Button x:Name="InsightsButton" Click="InsightsButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D2;"/><TextBlock x:Name="InsightsButtonText"/></StackPanel></Button>
+                <ToggleButton x:Name="ExperienceModeButton"
+                              Click="ExperienceModeButton_Click"
+                              AutomationProperties.Name="切换简单或专业模式">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE713;"/>
+                        <TextBlock x:Name="ExperienceModeText"/>
+                    </StackPanel>
+                </ToggleButton>
+                <StackPanel x:Name="ProfessionalQuickActions" Orientation="Horizontal" Spacing="8">
+                    <ToggleButton x:Name="AutoQuickToggle" Click="AutoQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE945;"/><TextBlock x:Name="AutoQuickText"/></StackPanel></ToggleButton>
+                    <ToggleButton x:Name="LiveQuickToggle" Click="LiveQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D9;"/><TextBlock x:Name="LiveQuickText"/></StackPanel></ToggleButton>
+                    <Button x:Name="RefreshButton" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;"/><ProgressRing x:Name="RefreshProgressRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="RefreshButtonText"/></StackPanel></Button>
+                    <Button x:Name="FeaturesButton" Click="FeaturesButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE713;"/><TextBlock x:Name="FeaturesButtonText"/></StackPanel></Button>
+                    <Button x:Name="InsightsButton" Click="InsightsButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D2;"/><TextBlock x:Name="InsightsButtonText"/></StackPanel></Button>
+                </StackPanel>
                 <Button x:Name="LanguageButton" Click="LanguageButton_Click"/>
             </StackPanel>
         </Grid>
@@ -48,7 +58,7 @@
             <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE708;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="SleepTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="SleepValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
         </Grid>
 
-        <Grid Grid.Row="2" ColumnSpacing="16">
+        <Grid x:Name="MainContentGrid" Grid.Row="2" ColumnSpacing="16">
             <Grid.ColumnDefinitions><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Border Style="{StaticResource PanelStyle}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -63,32 +73,34 @@
                             <Button x:Name="BalancedButton" AutomationProperties.AcceleratorKey="3" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Stretch" MinHeight="64" Click="BalancedButton_Click"><Grid ColumnSpacing="10"><Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE9E9;"/><StackPanel Grid.Column="1"><TextBlock x:Name="BalancedButtonText" FontWeight="SemiBold"/><TextBlock x:Name="BalancedDescription" FontSize="12" Opacity="0.72"/></StackPanel><TextBlock Grid.Column="2" Text="3" Opacity="0.55" FontSize="12" VerticalAlignment="Center"/></Grid></Button>
                             <Button x:Name="HighButton" AutomationProperties.AcceleratorKey="4" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" MinHeight="64" Click="HighButton_Click"><Grid ColumnSpacing="10"><Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE945;"/><StackPanel Grid.Column="1"><TextBlock x:Name="HighButtonText" FontWeight="SemiBold"/><TextBlock x:Name="HighDescription" FontSize="12" Opacity="0.72"/></StackPanel><TextBlock Grid.Column="2" Text="4" Opacity="0.55" FontSize="12" VerticalAlignment="Center"/></Grid></Button>
                         </Grid>
-                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,6"/>
-                        <TextBlock x:Name="CustomCpuTitle" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
-                        <TextBlock x:Name="CpuHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <Grid ColumnSpacing="10">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="72"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <Slider x:Name="CpuSlider" Minimum="20" Maximum="50" Value="28" StepFrequency="1" ValueChanged="CpuSlider_ValueChanged"/>
-                            <NumberBox x:Name="CpuBox" Grid.Column="1" Minimum="20" Maximum="50" Value="28" SpinButtonPlacementMode="Compact" ValueChanged="CpuBox_ValueChanged"/>
-                            <TextBlock Grid.Column="2" Text="%" VerticalAlignment="Center"/>
-                        </Grid>
-                        <Button x:Name="RemoteCustomButton" HorizontalAlignment="Stretch" Click="RemoteCustomButton_Click"/>
-                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,6"/>
-                        <TextBlock x:Name="AdvancedTitle" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <Grid ColumnSpacing="8" RowSpacing="8">
-                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                            <Button x:Name="VerifyButton" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" Click="VerifyButton_Click"/>
-                            <Button x:Name="RepairButton" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch" Click="RepairButton_Click"/>
-                            <Button x:Name="WifiOnButton" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Stretch" Click="WifiOnButton_Click"/>
-                            <Button x:Name="RemoteNoWifiButton" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Click="RemoteNoWifiButton_Click"/>
-                        </Grid>
-                        <TextBlock x:Name="CliPathText" Foreground="{ThemeResource TextFillColorTertiaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <StackPanel x:Name="ProfessionalModeControls" Spacing="10">
+                            <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,6"/>
+                            <TextBlock x:Name="CustomCpuTitle" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                            <TextBlock x:Name="CpuHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="72"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Slider x:Name="CpuSlider" Minimum="20" Maximum="50" Value="28" StepFrequency="1" ValueChanged="CpuSlider_ValueChanged"/>
+                                <NumberBox x:Name="CpuBox" Grid.Column="1" Minimum="20" Maximum="50" Value="28" SpinButtonPlacementMode="Compact" ValueChanged="CpuBox_ValueChanged"/>
+                                <TextBlock Grid.Column="2" Text="%" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Button x:Name="RemoteCustomButton" HorizontalAlignment="Stretch" Click="RemoteCustomButton_Click"/>
+                            <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,6"/>
+                            <TextBlock x:Name="AdvancedTitle" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Grid ColumnSpacing="8" RowSpacing="8">
+                                <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                <Button x:Name="VerifyButton" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" Click="VerifyButton_Click"/>
+                                <Button x:Name="RepairButton" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch" Click="RepairButton_Click"/>
+                                <Button x:Name="WifiOnButton" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Stretch" Click="WifiOnButton_Click"/>
+                                <Button x:Name="RemoteNoWifiButton" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Click="RemoteNoWifiButton_Click"/>
+                            </Grid>
+                            <TextBlock x:Name="CliPathText" Foreground="{ThemeResource TextFillColorTertiaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
 
-            <Border Grid.Column="1" Style="{StaticResource PanelStyle}">
+            <Border x:Name="ProfessionalLogPanel" Grid.Column="1" Style="{StaticResource PanelStyle}">
                 <Grid RowSpacing="12">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Grid>
