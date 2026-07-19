@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,14 +25,20 @@ public interface IRecoveryHistory
 
 public interface IRecoveryBackend
 {
-    Task CreateSafetyBackupAsync(string reason, CancellationToken token);
+    Task<ConfigurationBackupInfo> CreateSafetyBackupAsync(
+        string reason,
+        CancellationToken token);
     Task SaveDefaultSettingsAsync(CancellationToken token);
+    Task RestoreSafetyBackupAsync(
+        ConfigurationBackupInfo backup,
+        CancellationToken token);
 }
 
 public sealed record RecoveryActionResult(
     bool MutationSucceeded,
     bool AuditSucceeded,
-    string? Error = null)
+    string? Error = null,
+    bool? RollbackSucceeded = null)
 {
     public bool Succeeded => MutationSucceeded && AuditSucceeded;
     public bool IsPartialSuccess => MutationSucceeded && !AuditSucceeded;
@@ -84,8 +89,11 @@ public static class RecoveryBackupSelector
 
 public sealed class ProductionRecoveryBackend : IRecoveryBackend
 {
-    private readonly Func<string, CancellationToken, Task> _createSafetyBackupAsync;
+    private readonly Func<string, CancellationToken, Task<ConfigurationBackupInfo>>
+        _createSafetyBackupAsync;
     private readonly Action<PowerModeSettings> _saveSettings;
+    private readonly Func<ConfigurationBackupInfo, CancellationToken, Task>
+        _restoreSafetyBackupAsync;
 
     public ProductionRecoveryBackend(
         SystemIntegrationService systemIntegration,
@@ -93,28 +101,43 @@ public sealed class ProductionRecoveryBackend : IRecoveryBackend
     {
         ArgumentNullException.ThrowIfNull(systemIntegration);
         ArgumentNullException.ThrowIfNull(backupRetentionProvider);
-        _createSafetyBackupAsync = async (reason, token) =>
+        _createSafetyBackupAsync = (reason, token) =>
+            systemIntegration.CreateConfigurationBackupAsync(
+                SettingsStore.FilePath,
+                reason,
+                Math.Clamp(backupRetentionProvider(), 1, 50),
+                token);
+        _saveSettings = SettingsStore.Save;
+        _restoreSafetyBackupAsync = async (backup, token) =>
         {
-            await systemIntegration.CreateConfigurationBackupAsync(
+            var result = await systemIntegration.RestoreConfigurationBackupAsync(
+                    backup.Path,
                     SettingsStore.FilePath,
-                    reason,
-                    Math.Clamp(backupRetentionProvider(), 1, 50),
+                    createSafetyBackup: false,
                     token)
                 .ConfigureAwait(false);
+            if (!result.Succeeded)
+                throw new IOException(result.Error ?? "Configuration rollback failed.");
         };
-        _saveSettings = SettingsStore.Save;
     }
 
     internal ProductionRecoveryBackend(
-        Func<string, CancellationToken, Task> createSafetyBackupAsync,
-        Action<PowerModeSettings> saveSettings)
+        Func<string, CancellationToken, Task<ConfigurationBackupInfo>>
+            createSafetyBackupAsync,
+        Action<PowerModeSettings> saveSettings,
+        Func<ConfigurationBackupInfo, CancellationToken, Task>
+            restoreSafetyBackupAsync)
     {
         _createSafetyBackupAsync = createSafetyBackupAsync
             ?? throw new ArgumentNullException(nameof(createSafetyBackupAsync));
         _saveSettings = saveSettings ?? throw new ArgumentNullException(nameof(saveSettings));
+        _restoreSafetyBackupAsync = restoreSafetyBackupAsync
+            ?? throw new ArgumentNullException(nameof(restoreSafetyBackupAsync));
     }
 
-    public Task CreateSafetyBackupAsync(string reason, CancellationToken token) =>
+    public Task<ConfigurationBackupInfo> CreateSafetyBackupAsync(
+        string reason,
+        CancellationToken token) =>
         _createSafetyBackupAsync(reason, token);
 
     public Task SaveDefaultSettingsAsync(CancellationToken token)
@@ -123,6 +146,11 @@ public sealed class ProductionRecoveryBackend : IRecoveryBackend
         _saveSettings(new PowerModeSettings());
         return Task.CompletedTask;
     }
+
+    public Task RestoreSafetyBackupAsync(
+        ConfigurationBackupInfo backup,
+        CancellationToken token) =>
+        _restoreSafetyBackupAsync(backup, token);
 }
 
 public sealed class RecoveryService
@@ -146,7 +174,6 @@ public sealed class RecoveryService
     private readonly IRecoveryBackend _backend;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly Dictionary<Guid, CompletedRecoveryOperation> _completedOperations = [];
-    private readonly Guid _sessionOperationNamespace = Guid.NewGuid();
 
     public RecoveryService(IRecoveryHistory history, IRecoveryBackend backend)
     {
@@ -199,22 +226,21 @@ public sealed class RecoveryService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(strictReloadAndApplyAsync);
-        var operationId = CreateStableOperationId(
-            _sessionOperationNamespace,
-            "configuration-reset");
+        const string intentKey = "configuration-reset";
         await _operationGate.WaitAsync(cancellationToken);
         try
         {
-            if (_completedOperations.TryGetValue(operationId, out var completed))
-                return await RecordCompletedOperationAsync(completed);
+            var pendingAudit = FindPendingAudit(intentKey);
+            if (pendingAudit is not null)
+                return await RecordCompletedOperationAsync(pendingAudit);
 
+            ConfigurationBackupInfo safetyBackup;
             try
             {
-                await _backend.CreateSafetyBackupAsync(
+                safetyBackup = await _backend.CreateSafetyBackupAsync(
                     "before-reset-defaults",
                     cancellationToken);
                 await _backend.SaveDefaultSettingsAsync(cancellationToken);
-                await strictReloadAndApplyAsync(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -225,16 +251,45 @@ public sealed class RecoveryService
                 return new RecoveryActionResult(false, false, ex.Message);
             }
 
-            completed = new CompletedRecoveryOperation(new SwitchHistoryEntry
+            try
             {
-                Id = operationId,
+                await strictReloadAndApplyAsync(CancellationToken.None);
+            }
+            catch (Exception reloadError)
+            {
+                try
+                {
+                    await _backend.RestoreSafetyBackupAsync(
+                        safetyBackup,
+                        CancellationToken.None);
+                    await strictReloadAndApplyAsync(CancellationToken.None);
+                }
+                catch (Exception rollbackError)
+                {
+                    return new RecoveryActionResult(
+                        false,
+                        false,
+                        $"{reloadError.Message} Rollback failed: {rollbackError.Message}",
+                        RollbackSucceeded: false);
+                }
+
+                return new RecoveryActionResult(
+                    false,
+                    false,
+                    reloadError.Message,
+                    RollbackSucceeded: true);
+            }
+
+            var completed = new CompletedRecoveryOperation(intentKey, new SwitchHistoryEntry
+            {
+                Id = Guid.NewGuid(),
                 Timestamp = DateTimeOffset.Now,
                 OperationKind = "configuration-reset",
                 Trigger = "recovery-center",
                 Reason = "Reset settings to defaults",
                 Succeeded = true
             });
-            _completedOperations[operationId] = completed;
+            _completedOperations[completed.Entry.Id] = completed;
             return await RecordCompletedOperationAsync(completed);
         }
         finally
@@ -254,14 +309,13 @@ public sealed class RecoveryService
         ArgumentNullException.ThrowIfNull(restoreAsync);
         ArgumentNullException.ThrowIfNull(strictReloadAndApplyAsync);
         ArgumentNullException.ThrowIfNull(rollbackAsync);
-        var operationId = CreateStableOperationId(
-            _sessionOperationNamespace,
-            $"configuration-restore:{operationIdentity}");
+        var intentKey = $"configuration-restore:{operationIdentity}";
         await _operationGate.WaitAsync(cancellationToken);
         try
         {
-            if (_completedOperations.TryGetValue(operationId, out var completed))
-                return await RecordCompletedOperationAsync(completed);
+            var pendingAudit = FindPendingAudit(intentKey);
+            if (pendingAudit is not null)
+                return await RecordCompletedOperationAsync(pendingAudit);
 
             ConfigurationRestoreResult restoreResult;
             try
@@ -311,9 +365,9 @@ public sealed class RecoveryService
                 return new RecoveryActionResult(false, false, reloadError.Message);
             }
 
-            completed = new CompletedRecoveryOperation(new SwitchHistoryEntry
+            var completed = new CompletedRecoveryOperation(intentKey, new SwitchHistoryEntry
             {
-                Id = operationId,
+                Id = Guid.NewGuid(),
                 Timestamp = DateTimeOffset.Now,
                 OperationKind = "configuration-restore",
                 TargetMode = Path.GetFileName(restoreResult.BackupPath),
@@ -323,7 +377,7 @@ public sealed class RecoveryService
                     : $"Safety backup: {restoreResult.SafetyBackup.FileName}",
                 Succeeded = true
             });
-            _completedOperations[operationId] = completed;
+            _completedOperations[completed.Entry.Id] = completed;
             return await RecordCompletedOperationAsync(completed);
         }
         finally
@@ -341,12 +395,7 @@ public sealed class RecoveryService
         await _operationGate.WaitAsync(cancellationToken);
         try
         {
-            var pendingAudit = _completedOperations.Values.FirstOrDefault(operation =>
-                !operation.AuditSucceeded
-                && string.Equals(
-                    operation.Entry.OperationKind,
-                    "mode-undo",
-                    StringComparison.OrdinalIgnoreCase));
+            var pendingAudit = FindPendingAudit("mode-undo");
             if (pendingAudit is not null)
                 return await RecordCompletedOperationAsync(pendingAudit);
 
@@ -378,10 +427,9 @@ public sealed class RecoveryService
             if (!mutationSucceeded)
                 return new RecoveryActionResult(false, false, "The mode pipeline did not complete.");
 
-            var operationId = CreateStableOperationId(original.Id, "mode-undo");
-            var completed = new CompletedRecoveryOperation(new SwitchHistoryEntry
+            var completed = new CompletedRecoveryOperation("mode-undo", new SwitchHistoryEntry
             {
-                Id = operationId,
+                Id = Guid.NewGuid(),
                 Timestamp = DateTimeOffset.Now,
                 OperationKind = "mode-undo",
                 RelatedOperationId = original.Id,
@@ -393,7 +441,7 @@ public sealed class RecoveryService
                 Succeeded = true,
                 DurationMilliseconds = stopwatch.ElapsedMilliseconds
             });
-            _completedOperations[operationId] = completed;
+            _completedOperations[completed.Entry.Id] = completed;
             return await RecordCompletedOperationAsync(completed);
         }
         finally
@@ -415,30 +463,25 @@ public sealed class RecoveryService
         {
             await _history.RecordAsync(operation.Entry, CancellationToken.None)
                 .ConfigureAwait(false);
-            operation.AuditSucceeded = true;
+            _completedOperations.Remove(operation.Entry.Id);
             return new RecoveryActionResult(true, true);
         }
         catch (Exception ex)
         {
-            operation.AuditSucceeded = false;
             return new RecoveryActionResult(true, false, ex.Message);
         }
     }
 
-    private static Guid CreateStableOperationId(Guid sourceId, string operationKind)
-    {
-        var sourceBytes = sourceId.ToByteArray();
-        var kindBytes = Encoding.UTF8.GetBytes(operationKind);
-        var input = new byte[sourceBytes.Length + kindBytes.Length];
-        sourceBytes.CopyTo(input, 0);
-        kindBytes.CopyTo(input, sourceBytes.Length);
-        return new Guid(SHA256.HashData(input).AsSpan(0, 16));
-    }
+    private CompletedRecoveryOperation? FindPendingAudit(string intentKey) =>
+        _completedOperations.Values.FirstOrDefault(operation =>
+            string.Equals(operation.IntentKey, intentKey, StringComparison.Ordinal));
 
-    private sealed class CompletedRecoveryOperation(SwitchHistoryEntry entry)
+    private sealed class CompletedRecoveryOperation(
+        string intentKey,
+        SwitchHistoryEntry entry)
     {
+        public string IntentKey { get; } = intentKey;
         public SwitchHistoryEntry Entry { get; } = entry;
-        public bool AuditSucceeded { get; set; }
     }
 }
 

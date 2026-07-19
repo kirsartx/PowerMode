@@ -145,3 +145,60 @@ Addressed all eight recovery review findings:
 Interactive foreground verification remains intentionally omitted because the
 task prohibits launching the GUI. The compiled WinUI project, source-structure
 gates, behavioral tests, and Debug/Release suites are green.
+
+## Blocking follow-up: pending audits and reset rollback
+
+Resolved the two remaining recovery blockers:
+
+- `_completedOperations` now contains only mutation-complete, audit-pending
+  entries. A failed append retains the exact entry and audit ID for an
+  audit-only retry; a successful or idempotent `RecordAsync` removes it.
+  A later reset or restore user intent therefore creates a fresh audit ID and
+  performs a fresh backup/mutation/audit. Successful undo audits are removed
+  as well, after which the persisted linked undo masks the original operation.
+- Reset safety backups now return a concrete `ConfigurationBackupInfo` handle.
+  `ProductionRecoveryBackend` restores that handle through the existing atomic
+  restore pipeline with `createSafetyBackup: false`.
+- Once defaults have been saved, forward strict reload/apply runs with
+  `CancellationToken.None`. If it fails, reset atomically restores the safety
+  backup and strictly reloads/applies the rollback result, also with a
+  non-cancelled token.
+- `RecoveryActionResult.RollbackSucceeded` reports explicit reset rollback
+  state. Successful rollback returns mutation/audit failure with rollback
+  success and no `configuration-reset` audit. Rollback restore or strict
+  reapply failure returns rollback failure with the original and rollback
+  errors combined, also without an audit.
+- Main-window `WaitForIdleAsync` disposal ordering and all closed-window
+  presentation guards remain unchanged.
+
+### RED/GREEN evidence
+
+- Pending-audit RED: four repeat-intent/retry tests failed because reset and
+  restore remained permanently completed after the first successful audit.
+- Pending-audit GREEN: 4 passed, 0 failed after successful audit removal,
+  stable pending retry IDs, and fresh IDs for later intents.
+- Reset rollback RED: three tests failed because reload received the cancelled
+  owner token and reset had neither a backup handle nor rollback state.
+- Reset rollback GREEN: 3 passed, 0 failed after adding the minimal backend
+  handle/restore contract and non-cancelled rollback flow.
+
+### Final verification
+
+- Focused recovery/settings/presentation suite:
+  - Result: 51 passed, 0 failed.
+- Full Debug suite:
+  - `dotnet test tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Debug --no-restore`
+  - Result: 116 passed, 0 failed.
+- Full Release suite:
+  - `dotnet test tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Release --no-restore`
+  - Result: 116 passed, 0 failed.
+- Release solution build:
+  - `dotnet build PowerMode.slnx -c Release --no-restore`
+  - Result: succeeded, 0 warnings, 0 errors.
+- Final `git diff --check`:
+  - Result: clean.
+
+### Remaining concern
+
+Interactive foreground verification remains intentionally omitted because the
+task prohibits launching the GUI. No GUI process was started.

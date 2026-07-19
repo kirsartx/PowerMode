@@ -213,8 +213,10 @@ public sealed class RecoveryServiceTests
         var saved = false;
         var history = new InMemoryRecoveryHistory([]);
         var backend = new ProductionRecoveryBackend(
-            (_, _) => Task.FromException(new IOException("backup failed")),
-            _ => saved = true);
+            (_, _) => Task.FromException<ConfigurationBackupInfo>(
+                new IOException("backup failed")),
+            _ => saved = true,
+            (_, _) => Task.CompletedTask);
         var service = new RecoveryService(history, backend);
 
         var result = await service.ResetDefaultsAsync(_ => Task.CompletedTask);
@@ -234,13 +236,19 @@ public sealed class RecoveryServiceTests
             (reason, _) =>
             {
                 calls.Add($"backup:{reason}");
-                return Task.CompletedTask;
+                return Task.FromResult(new ConfigurationBackupInfo(
+                    "safety.json",
+                    "safety.json",
+                    DateTimeOffset.UtcNow,
+                    10,
+                    "ABC"));
             },
             settings =>
             {
                 calls.Add("save-defaults");
                 saved = settings;
-            });
+            },
+            (_, _) => Task.CompletedTask);
         var service = new RecoveryService(new InMemoryRecoveryHistory([]), backend);
 
         var result = await service.ResetDefaultsAsync(_ => Task.CompletedTask);
@@ -253,18 +261,118 @@ public sealed class RecoveryServiceTests
     }
 
     [Fact]
-    public async Task ResetDefaultsAsync_StrictReloadFailureDoesNotReportSuccess()
+    public async Task ResetDefaultsAsync_CancellationAfterSaveUsesNonCancelledStrictReload()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var history = new InMemoryRecoveryHistory([]);
+        var backend = new FakeRecoveryBackend(afterSave: cancellation.Cancel);
+        var service = new RecoveryService(history, backend);
+        var reloadCount = 0;
+
+        var result = await service.ResetDefaultsAsync(
+            token =>
+            {
+                reloadCount++;
+                Assert.False(token.IsCancellationRequested);
+                return Task.CompletedTask;
+            },
+            cancellation.Token);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, reloadCount);
+        Assert.Single(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task ResetDefaultsAsync_StrictReloadFailureRollsBackAndReloadsSafetyBackup()
     {
         var history = new InMemoryRecoveryHistory([]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var backend = new FakeRecoveryBackend();
+        var service = new RecoveryService(history, backend);
+        var reloadCount = 0;
+
+        var result = await service.ResetDefaultsAsync(
+            _ =>
+            {
+                reloadCount++;
+                return reloadCount == 1
+                    ? Task.FromException(new JsonException("invalid saved settings"))
+                    : Task.CompletedTask;
+            });
+
+        Assert.False(result.MutationSucceeded);
+        Assert.False(result.AuditSucceeded);
+        Assert.Equal(true, result.RollbackSucceeded);
+        Assert.Contains("invalid saved settings", result.Error);
+        Assert.Equal(
+            [
+                "backup:before-reset-defaults",
+                "save-defaults",
+                $"restore:{backend.SafetyBackup.Path}"
+            ],
+            backend.Calls);
+        Assert.Equal(2, reloadCount);
+        Assert.Empty(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task ResetDefaultsAsync_RollbackFailureReportsBothErrorsAndDoesNotAudit()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var backend = new FakeRecoveryBackend(
+            restoreError: new IOException("rollback unavailable"));
+        var service = new RecoveryService(history, backend);
 
         var result = await service.ResetDefaultsAsync(
             _ => Task.FromException(new JsonException("invalid saved settings")));
 
         Assert.False(result.MutationSucceeded);
         Assert.False(result.AuditSucceeded);
+        Assert.Equal(false, result.RollbackSucceeded);
         Assert.Contains("invalid saved settings", result.Error);
+        Assert.Contains("rollback unavailable", result.Error);
+        Assert.Equal(
+            [
+                "backup:before-reset-defaults",
+                "save-defaults",
+                $"restore:{backend.SafetyBackup.Path}"
+            ],
+            backend.Calls);
         Assert.Empty(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task ResetDefaultsAsync_AuditSuccessAllowsNextUserIntent()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var backend = new FakeRecoveryBackend();
+        var service = new RecoveryService(history, backend);
+        var reloadCount = 0;
+
+        var first = await service.ResetDefaultsAsync(_ =>
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        });
+        var second = await service.ResetDefaultsAsync(_ =>
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        });
+
+        Assert.True(first.Succeeded);
+        Assert.True(second.Succeeded);
+        Assert.Equal(
+            [
+                "backup:before-reset-defaults",
+                "save-defaults",
+                "backup:before-reset-defaults",
+                "save-defaults"
+            ],
+            backend.Calls);
+        Assert.Equal(2, reloadCount);
+        Assert.Equal(2, history.RecordedEntries.Count);
+        Assert.NotEqual(history.RecordedEntries[0].Id, history.RecordedEntries[1].Id);
     }
 
     [Fact]
@@ -285,14 +393,76 @@ public sealed class RecoveryServiceTests
             reloadCount++;
             return Task.CompletedTask;
         });
+        var third = await service.ResetDefaultsAsync(_ =>
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        });
 
         Assert.True(first.MutationSucceeded);
         Assert.False(first.AuditSucceeded);
         Assert.True(second.Succeeded);
-        Assert.Equal(["backup:before-reset-defaults", "save-defaults"], backend.Calls);
-        Assert.Equal(1, reloadCount);
-        var entry = Assert.Single(history.RecordedEntries);
-        Assert.Equal("configuration-reset", entry.OperationKind);
+        Assert.True(third.Succeeded);
+        Assert.Equal(
+            [
+                "backup:before-reset-defaults",
+                "save-defaults",
+                "backup:before-reset-defaults",
+                "save-defaults"
+            ],
+            backend.Calls);
+        Assert.Equal(2, reloadCount);
+        Assert.Equal(history.AttemptedIds[0], history.AttemptedIds[1]);
+        Assert.NotEqual(history.AttemptedIds[1], history.AttemptedIds[2]);
+        Assert.Equal(2, history.RecordedEntries.Count);
+        Assert.All(
+            history.RecordedEntries,
+            entry => Assert.Equal("configuration-reset", entry.OperationKind));
+    }
+
+    [Fact]
+    public async Task RestoreConfigurationAsync_AuditSuccessAllowsNextUserIntent()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var restoreCount = 0;
+        var reloadCount = 0;
+        var restoreResult = new ConfigurationRestoreResult(
+            true,
+            "settings.json",
+            "settings.backup.json",
+            null,
+            null);
+
+        Task<ConfigurationRestoreResult> Restore(CancellationToken _)
+        {
+            restoreCount++;
+            return Task.FromResult(restoreResult);
+        }
+
+        Task Reload(CancellationToken _)
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        }
+
+        var first = await service.RestoreConfigurationAsync(
+            "settings.backup.json",
+            Restore,
+            Reload,
+            (_, _) => Task.CompletedTask);
+        var second = await service.RestoreConfigurationAsync(
+            "settings.backup.json",
+            Restore,
+            Reload,
+            (_, _) => Task.CompletedTask);
+
+        Assert.True(first.Succeeded);
+        Assert.True(second.Succeeded);
+        Assert.Equal(2, restoreCount);
+        Assert.Equal(2, reloadCount);
+        Assert.Equal(2, history.RecordedEntries.Count);
+        Assert.NotEqual(history.RecordedEntries[0].Id, history.RecordedEntries[1].Id);
     }
 
     [Fact]
@@ -331,15 +501,28 @@ public sealed class RecoveryServiceTests
             Restore,
             Reload,
             (_, _) => Task.CompletedTask);
+        var third = await service.RestoreConfigurationAsync(
+            "settings.backup.json",
+            Restore,
+            Reload,
+            (_, _) => Task.CompletedTask);
 
         Assert.True(first.MutationSucceeded);
         Assert.False(first.AuditSucceeded);
         Assert.True(second.Succeeded);
-        Assert.Equal(1, restoreCount);
-        Assert.Equal(1, reloadCount);
-        var entry = Assert.Single(history.RecordedEntries);
-        Assert.Equal("configuration-restore", entry.OperationKind);
-        Assert.Equal("settings.backup.json", entry.TargetMode);
+        Assert.True(third.Succeeded);
+        Assert.Equal(2, restoreCount);
+        Assert.Equal(2, reloadCount);
+        Assert.Equal(history.AttemptedIds[0], history.AttemptedIds[1]);
+        Assert.NotEqual(history.AttemptedIds[1], history.AttemptedIds[2]);
+        Assert.Equal(2, history.RecordedEntries.Count);
+        Assert.All(
+            history.RecordedEntries,
+            entry =>
+            {
+                Assert.Equal("configuration-restore", entry.OperationKind);
+                Assert.Equal("settings.backup.json", entry.TargetMode);
+            });
     }
 
     [Fact]
@@ -729,6 +912,7 @@ public sealed class RecoveryServiceTests
         : IRecoveryHistory
     {
         private bool _failed;
+        public List<Guid> AttemptedIds { get; } = [];
         public List<SwitchHistoryEntry> RecordedEntries { get; } = [];
 
         public Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
@@ -741,6 +925,7 @@ public sealed class RecoveryServiceTests
             SwitchHistoryEntry entry,
             CancellationToken cancellationToken = default)
         {
+            AttemptedIds.Add(entry.Id);
             if (!_failed)
             {
                 _failed = true;
@@ -769,25 +954,49 @@ public sealed class RecoveryServiceTests
         }
     }
 
-    private sealed class FakeRecoveryBackend(bool pauseBackup = false) : IRecoveryBackend
+    private sealed class FakeRecoveryBackend(
+        bool pauseBackup = false,
+        Action? afterSave = null,
+        Exception? restoreError = null) : IRecoveryBackend
     {
-        private readonly TaskCompletionSource _backupCompletion =
+        private readonly TaskCompletionSource<ConfigurationBackupInfo> _backupCompletion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public List<string> Calls { get; } = [];
+        public ConfigurationBackupInfo SafetyBackup { get; } = new(
+            "reset-safety.json",
+            "reset-safety.json",
+            DateTimeOffset.UtcNow,
+            10,
+            "ABC");
 
-        public Task CreateSafetyBackupAsync(string reason, CancellationToken token)
+        public Task<ConfigurationBackupInfo> CreateSafetyBackupAsync(
+            string reason,
+            CancellationToken token)
         {
             Calls.Add($"backup:{reason}");
-            return pauseBackup ? _backupCompletion.Task : Task.CompletedTask;
+            return pauseBackup
+                ? _backupCompletion.Task
+                : Task.FromResult(SafetyBackup);
         }
 
         public Task SaveDefaultSettingsAsync(CancellationToken token)
         {
             Calls.Add("save-defaults");
+            afterSave?.Invoke();
             return Task.CompletedTask;
         }
 
-        public void CompleteBackup() => _backupCompletion.TrySetResult();
+        public Task RestoreSafetyBackupAsync(
+            ConfigurationBackupInfo backup,
+            CancellationToken token)
+        {
+            Calls.Add($"restore:{backup.Path}");
+            return restoreError is null
+                ? Task.CompletedTask
+                : Task.FromException(restoreError);
+        }
+
+        public void CompleteBackup() => _backupCompletion.TrySetResult(SafetyBackup);
     }
 }
