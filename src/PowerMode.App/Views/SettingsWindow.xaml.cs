@@ -52,7 +52,7 @@ public sealed partial class SettingsWindow : Window
         ExperienceMode mode,
         HardwareCapabilities capabilities)
     {
-        var policy = CapabilityVisibilityPolicy.Evaluate(mode, capabilities);
+        var policy = CapabilityVisibilityPolicy.Evaluate(mode, capabilities, _zh);
         var brightness = policy[CapabilityFeature.Brightness];
         ApplyCapabilityPresentation(BrightnessSettingsPanel, brightness);
         BrightnessSlider.IsEnabled = brightness.IsEnabled;

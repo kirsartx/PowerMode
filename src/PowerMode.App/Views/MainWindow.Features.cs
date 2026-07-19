@@ -230,7 +230,7 @@ public sealed partial class MainWindow
     private void ApplyCapabilityPresentation()
     {
         var policy=CapabilityVisibilityPolicy.Evaluate(
-            _featureSettings.ExperienceMode,_hardwareCapabilities);
+            _featureSettings.ExperienceMode,_hardwareCapabilities,IsChinese);
         ApplyCapabilityPresentation(
             GpuStatusCard,policy[CapabilityFeature.GpuTelemetry]);
         ApplyCapabilityPresentation(

@@ -144,7 +144,8 @@
                     <TextBlock x:Name="ResultMessageText"
                                Text="正在检查可用的恢复操作。"
                                TextWrapping="Wrap"
-                               VerticalAlignment="Center"/>
+                               VerticalAlignment="Center"
+                               AutomationProperties.LiveSetting="Polite"/>
                     <ProgressRing x:Name="BusyProgressRing"
                                   Grid.Column="1"
                                   Width="20"

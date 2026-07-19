@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 
 namespace PowerModeWinUI;
@@ -31,27 +32,40 @@ public sealed partial class RecoveryCenterWindow : Window
     private void ApplyLanguage()
     {
         Title = _isChinese ? "PowerMode 恢复中心" : "PowerMode Recovery Center";
-        if (_isChinese)
-            return;
+        if (!_isChinese)
+        {
+            HeaderText.Text = "Recovery center";
+            SubheaderText.Text = "Undo the latest mode operation or safely restore PowerMode configuration";
+            UndoTitle.Text = "Undo latest mode switch";
+            UndoImpactText.Text = "Return to the standard power mode used before that operation.";
+            UndoAvailabilityText.Text = "Checking mode history…";
+            UndoButton.Content = "Undo";
+            RestoreTitle.Text = "Restore configuration backup";
+            RestoreImpactText.Text =
+                "Back up current settings, then atomically restore the latest distinct configuration. The active Windows power plan is not changed.";
+            RestoreAvailabilityText.Text = "Checking configuration backups…";
+            RestoreButton.Content = "Restore";
+            ResetTitle.Text = "Reset to defaults";
+            ResetImpactText.Text =
+                "After a safety backup, reset settings.json only. History, backups and telemetry remain intact.";
+            ResetAvailabilityText.Text =
+                "Defaults use Simple experience and the Balanced preference. The active Windows power plan is not changed.";
+            ResetButton.Content = "Reset defaults";
+            ResultMessageText.Text = "Checking available recovery operations.";
+        }
 
-        HeaderText.Text = "Recovery center";
-        SubheaderText.Text = "Undo the latest mode operation or safely restore PowerMode configuration";
-        UndoTitle.Text = "Undo latest mode switch";
-        UndoImpactText.Text = "Return to the standard power mode used before that operation.";
-        UndoAvailabilityText.Text = "Checking mode history…";
-        UndoButton.Content = "Undo";
-        RestoreTitle.Text = "Restore configuration backup";
-        RestoreImpactText.Text =
-            "Back up current settings, then atomically restore the latest distinct configuration. The active Windows power plan is not changed.";
-        RestoreAvailabilityText.Text = "Checking configuration backups…";
-        RestoreButton.Content = "Restore";
-        ResetTitle.Text = "Reset to defaults";
-        ResetImpactText.Text =
-            "After a safety backup, reset settings.json only. History, backups and telemetry remain intact.";
-        ResetAvailabilityText.Text =
-            "Defaults use Simple experience and the Balanced preference. The active Windows power plan is not changed.";
-        ResetButton.Content = "Reset defaults";
-        ResultMessageText.Text = "Checking available recovery operations.";
+        AutomationProperties.SetName(
+            UndoButton,
+            _isChinese ? "撤销最近模式切换" : "Undo latest mode switch");
+        AutomationProperties.SetName(
+            RestoreButton,
+            _isChinese ? "恢复配置备份" : "Restore configuration backup");
+        AutomationProperties.SetName(
+            ResetButton,
+            _isChinese ? "重置为默认设置" : "Reset to defaults");
+        AutomationProperties.SetName(
+            ResultMessageText,
+            _isChinese ? "恢复操作结果" : "Recovery operation result");
     }
 
     private async void Root_Loaded(object sender, RoutedEventArgs e)
