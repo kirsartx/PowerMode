@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System.ComponentModel;
@@ -20,6 +21,7 @@ public sealed partial class MainWindow
     private const uint ModAlt=0x0001,ModControl=0x0002;
     private PowerModeSettings _featureSettings=SettingsStore.Load();
     private DispatcherTimer? _featureTimer;
+    private bool _featureTickInProgress;
     private string _startupPlanGuid=string.Empty,_lastAutoMode=string.Empty;
     private CustomPowerProfile? _lastCustomProfile;
     private bool _customProfileInProgress;
@@ -27,25 +29,75 @@ public sealed partial class MainWindow
     private IntPtr _hwnd;
     private Native.SubclassProc? _subclassProc;
     private bool _trayAdded;
+    private bool _globalHotkeysAvailable;
+    private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
+    private HardwareCapabilityService? _hardwareCapabilityService;
+    private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
+
+    internal HardwareCapabilities HardwareCapabilities => _hardwareCapabilities;
 
     private void InitializeFeatures()
     {
         _hwnd=WinRT.Interop.WindowNative.GetWindowHandle(this);_startupPlanGuid=GetActivePlanGuidFast();
         _subclassProc=WindowSubclassProc;Native.SetWindowSubclass(_hwnd,_subclassProc,1,UIntPtr.Zero);
-        RegisterGlobalHotkeys();AddTrayIcon();InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
+        RegisterGlobalHotkeys();AddTrayIcon();
+        _hardwareCapabilityService=new HardwareCapabilityService(new WindowsHardwareCapabilityProbe(
+            ()=>_trayAdded,()=>_globalHotkeysAvailable));
+        InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
         AppWindow.Changed+=AppWindow_Changed;AppWindow.Closing+=AppWindow_Closing;
+    }
+
+    private void ApplyExperienceMode(ExperienceMode mode)
+    {
+        _featureSettings.ExperienceMode=mode;
+        var professional=mode==ExperienceMode.Professional;
+        ProfessionalQuickActions.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        ProfessionalModeControls.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        ProfessionalLogPanel.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        MainContentGrid.ColumnSpacing=professional?16:0;
+        MainContentGrid.ColumnDefinitions[0].Width=
+            professional?new GridLength(390):new GridLength(1,GridUnitType.Star);
+        MainContentGrid.ColumnDefinitions[1].Width=
+            professional?new GridLength(1,GridUnitType.Star):new GridLength(0);
+        ExperienceModeText.Text=professional
+            ?(IsChinese?"专业":"Professional")
+            :(IsChinese?"简单":"Simple");
+        ExperienceModeButton.IsChecked=professional;
+        ApplyCapabilityPresentation();
+    }
+
+    private void ExperienceModeButton_Click(object sender,RoutedEventArgs e)
+    {
+        var mode=ExperienceModeButton.IsChecked==true
+            ?ExperienceMode.Professional
+            :ExperienceMode.Simple;
+        ApplyExperienceMode(mode);
+        SettingsStore.Save(_featureSettings);
     }
 
     internal void ApplyFeatureSettings(PowerModeSettings settings)
     {
-        _featureSettings=settings;AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
+        _featureSettings=settings;
+        ApplyExperienceMode(settings.ExperienceMode);
+        AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
         if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
-        _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;if(settings.AutoSwitchEnabled||settings.RealTimeMonitoringEnabled||settings.TemperatureProtectionEnabled)_featureTimer.Start();
-        _=ConfigureMonitoringAsync();ApplySystemSettings(settings);
+        _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;_featureTimer.Start();
+        _=ConfigureMonitoringAsync();ApplySystemSettings(settings);_=RefreshRecommendationAsync();
     }
     private async void FeatureTimer_Tick(object? sender,object e)
     {
-        if(_busy||_modeSwitchInProgress)return;if(await RunAutomationTickAsync())return;if(_featureSettings.RealTimeMonitoringEnabled&&AppWindow.IsVisible)await RefreshStatusAsync();
+        if(_featureTickInProgress||_busy||_modeSwitchInProgress)return;
+        _featureTickInProgress=true;
+        try
+        {
+            await RefreshRecommendationAsync();
+            if(await RunAutomationTickAsync())return;
+            if(_featureSettings.RealTimeMonitoringEnabled&&AppWindow.IsVisible)await RefreshStatusAsync();
+        }
+        finally
+        {
+            _featureTickInProgress=false;
+        }
     }
     private string DetermineAutomaticMode()
     {
@@ -61,12 +113,20 @@ public sealed partial class MainWindow
     }
     private void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender,Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
+        _capabilityPresentationLifetime.Dispose();
+        _hardwareCapabilityService?.Dispose();
         DpiAwareWindowSizer.SavePlacement(this);
         if(_featureSettings.RestorePlanOnExit&&!string.IsNullOrEmpty(_startupPlanGuid)){try{using var p=Process.Start(new ProcessStartInfo("powercfg.exe",$"/setactive {_startupPlanGuid}"){UseShellExecute=false,CreateNoWindow=true});p?.WaitForExit(2500);}catch{}}
         CleanupNativeFeatures();
     }
 
-    private void RegisterGlobalHotkeys(){for(var id=1;id<=4;id++)Native.RegisterHotKey(_hwnd,id,ModControl|ModAlt,(uint)(0x30+id));}
+    private void RegisterGlobalHotkeys()
+    {
+        _globalHotkeysAvailable=true;
+        for(var id=1;id<=4;id++)
+            _globalHotkeysAvailable&=Native.RegisterHotKey(
+                _hwnd,id,ModControl|ModAlt,(uint)(0x30+id));
+    }
     private void CleanupNativeFeatures()
     {
         _featureTimer?.Stop();try{_settingsWindow?.Close();}catch{} _settingsWindow=null;for(var id=1;id<=4;id++)Native.UnregisterHotKey(_hwnd,id);if(_trayAdded){var data=CreateTrayData();Native.Shell_NotifyIcon(2,ref data);_trayAdded=false;}if(_subclassProc is not null)Native.RemoveWindowSubclass(_hwnd,_subclassProc,1);DisposeAdvancedFeatures();
@@ -137,6 +197,61 @@ public sealed partial class MainWindow
     private async void RootGrid_KeyDown(object sender,KeyRoutedEventArgs e)
     {
         if(e.Key==VirtualKey.F5){e.Handled=true;if(!_busy)await RefreshStatusAsync();return;}var focused=FocusManager.GetFocusedElement(RootGrid.XamlRoot);if(focused is TextBox or NumberBox)return;var mode=e.Key switch{VirtualKey.Number1 or VirtualKey.NumberPad1=>"remote",VirtualKey.Number2 or VirtualKey.NumberPad2=>"saver",VirtualKey.Number3 or VirtualKey.NumberPad3=>"balanced",VirtualKey.Number4 or VirtualKey.NumberPad4=>"high",_=>string.Empty};if(mode.Length>0){e.Handled=true;await RunModeAsync(mode);}
+    }
+
+    private async Task DetectCapabilitiesAndRefreshPresentationAsync()
+    {
+        if(_hardwareCapabilityService is null)return;
+        try
+        {
+            var capabilities=await Task
+                .Run(()=>_hardwareCapabilityService.DetectAsync(
+                    TimeSpan.FromSeconds(2),_capabilityPresentationLifetime.Token))
+                .ConfigureAwait(false);
+            void Apply()
+            {
+                _capabilityPresentationLifetime.TryApply(()=>
+                {
+                    _hardwareCapabilities=capabilities;
+                    ApplyCapabilityPresentation();
+                    _=RefreshRecommendationAsync();
+                });
+            }
+            if(_capabilityPresentationLifetime.IsClosing)return;
+            if(DispatcherQueue.HasThreadAccess)Apply();
+            else DispatcherQueue.TryEnqueue(Apply);
+        }
+        catch
+        {
+            // Capability detection is best-effort and must never affect core mode controls.
+        }
+    }
+
+    private void ApplyCapabilityPresentation()
+    {
+        var policy=CapabilityVisibilityPolicy.Evaluate(
+            _featureSettings.ExperienceMode,_hardwareCapabilities,IsChinese);
+        ApplyCapabilityPresentation(
+            GpuStatusCard,policy[CapabilityFeature.GpuTelemetry]);
+        ApplyCapabilityPresentation(
+            BrightnessStatusCard,policy[CapabilityFeature.Brightness]);
+        ApplyCapabilityPresentation(
+            WifiOnButton,policy[CapabilityFeature.WifiControl]);
+        ApplyCapabilityPresentation(
+            RemoteNoWifiButton,policy[CapabilityFeature.WifiControl]);
+        _settingsWindow?.ApplyCapabilityPresentation(
+            _featureSettings.ExperienceMode,_hardwareCapabilities);
+    }
+
+    private static void ApplyCapabilityPresentation(
+        FrameworkElement element,
+        FeaturePresentation presentation)
+    {
+        var state=CapabilityControlPresentation.Map(presentation);
+        element.Visibility=state.IsVisible?Visibility.Visible:Visibility.Collapsed;
+        if(element is Control control)control.IsEnabled=state.IsEnabled;
+        ToolTipService.SetToolTip(element,state.ToolTip);
+        AutomationProperties.SetHelpText(element,state.HelpText);
     }
 
     private static class Native

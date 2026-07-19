@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using System.Diagnostics;
 
@@ -15,6 +16,9 @@ public sealed partial class MainWindow
     private CancellationTokenSource? _modeSwitchCancellation;
     private PowerTelemetrySample? _lastTelemetry;
     private InsightsWindow? _insightsWindow;
+    private RecoveryCenterWindow? _recoveryCenterWindow;
+    private RecoveryService? _recoveryService;
+    private readonly CancellationTokenSource _recoveryLifetimeCancellation = new();
     private long _modeSwitchGeneration;
     private bool _modeSwitchInProgress;
     private bool _advancedFeaturesInitialized;
@@ -22,13 +26,17 @@ public sealed partial class MainWindow
     private bool _handlingTemperature;
     private string _temperatureRestoreMode = "balanced";
     private DateTimeOffset _lastLowBatteryNotification;
+    private RecommendationContext? _recommendationContext;
+    private ModeRecommendation? _currentRecommendation;
+    private readonly RecommendationApplyGate _recommendationApplyGate = new();
 
     private sealed record SwitchRequestContext(
         string Trigger,
         string Reason = "",
         Guid? RuleId = null,
         string? RuleName = null,
-        bool AllowPreview = true)
+        bool AllowPreview = true,
+        bool RecordHistory = true)
     {
         public static SwitchRequestContext Manual { get; } = new("manual");
     }
@@ -39,6 +47,11 @@ public sealed partial class MainWindow
             return;
 
         _advancedFeaturesInitialized = true;
+        _recoveryService = new RecoveryService(
+            HistoryStore.Default,
+            new ProductionRecoveryBackend(
+                _systemIntegration,
+                () => _featureSettings.ConfigurationBackupCount));
         _systemIntegration.NotificationSink = notification =>
         {
             if (!_featureSettings.NotificationsEnabled)
@@ -59,6 +72,7 @@ public sealed partial class MainWindow
 
     internal MonitoringService SharedMonitoringService => _monitoringService;
     internal SystemIntegrationService SharedSystemIntegrationService => _systemIntegration;
+    internal CancellationToken RecoveryLifetimeToken => _recoveryLifetimeCancellation.Token;
 
     private async Task RunStartupFeaturesAsync()
     {
@@ -108,33 +122,75 @@ public sealed partial class MainWindow
     internal IReadOnlyList<ConfigurationBackupInfo> ListSettingsBackups() =>
         _systemIntegration.ListConfigurationBackups();
 
-    internal async Task<ConfigurationRestoreResult?> RestoreLatestSettingsBackupAsync()
-    {
-        var backups = _systemIntegration.ListConfigurationBackups();
-        ConfigurationBackupInfo? latest;
-        try
-        {
-            var currentHash = File.Exists(SettingsStore.FilePath)
-                ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(SettingsStore.FilePath)))
-                : string.Empty;
-            latest = backups.FirstOrDefault(backup =>
-                !string.Equals(backup.Sha256, currentHash, StringComparison.OrdinalIgnoreCase));
-        }
-        catch
-        {
-            latest = backups.FirstOrDefault();
-        }
-        if (latest is null)
-            return null;
+    internal RecoveryBackupAvailability GetLatestDistinctSettingsBackup() =>
+        RecoveryBackupSelector.FindLatestDistinct(
+            _systemIntegration.ListConfigurationBackups(),
+            SettingsStore.FilePath);
 
-        var result = await _systemIntegration.RestoreConfigurationBackupAsync(
-            latest.Path,
-            SettingsStore.FilePath,
-            createSafetyBackup: true);
-        if (result.Succeeded)
-            ApplyFeatureSettings(SettingsStore.Load());
-        return result;
+    internal Task<RecoveryActionResult> RestoreSettingsBackupAsync(
+        ConfigurationBackupInfo backup,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(backup);
+        return GetRecoveryService().RestoreConfigurationAsync(
+            backup.Path,
+            token => _systemIntegration.RestoreConfigurationBackupAsync(
+                backup.Path,
+                SettingsStore.FilePath,
+                createSafetyBackup: true,
+                token),
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                ApplyFeatureSettings(SettingsStore.LoadStrict());
+                return Task.CompletedTask;
+            },
+            async (restoreResult, token) =>
+            {
+                var safetyBackup = restoreResult.SafetyBackup
+                    ?? throw new InvalidOperationException(
+                        "A safety backup is required to roll back configuration restore.");
+                var rollback = await _systemIntegration.RestoreConfigurationBackupAsync(
+                    safetyBackup.Path,
+                    SettingsStore.FilePath,
+                    createSafetyBackup: false,
+                    token);
+                if (!rollback.Succeeded)
+                    throw new IOException(rollback.Error ?? "Configuration rollback failed.");
+                ApplyFeatureSettings(SettingsStore.LoadStrict());
+            },
+            cancellationToken);
     }
+
+    internal Task<SwitchHistoryEntry?> FindLatestUndoableModeOperationAsync(
+        CancellationToken cancellationToken) =>
+        GetRecoveryService().FindLatestUndoableAsync(cancellationToken);
+
+    internal Task<RecoveryActionResult> UndoLatestModeOperationAsync(
+        CancellationToken cancellationToken) =>
+        GetRecoveryService().UndoLatestAsync(
+            (mode, _) => RunModeWithContextAsync(
+                mode,
+                new SwitchRequestContext(
+                    "recovery-center",
+                    IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
+                    AllowPreview: false,
+                    RecordHistory: false)),
+            IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
+            cancellationToken);
+
+    internal Task<RecoveryActionResult> ResetSettingsDefaultsAsync(
+        CancellationToken cancellationToken) =>
+        GetRecoveryService().ResetDefaultsAsync(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            ApplyFeatureSettings(SettingsStore.LoadStrict());
+            return Task.CompletedTask;
+        }, cancellationToken);
+
+    private RecoveryService GetRecoveryService() =>
+        _recoveryService ?? throw new InvalidOperationException(
+            "Recovery services are not initialized.");
 
     internal ChargingLimitCapability GetChargingLimitCapability() =>
         _systemIntegration.GetChargingLimitCapability();
@@ -255,6 +311,7 @@ public sealed partial class MainWindow
         {
             _handlingTemperature = true;
             _temperatureProtectionActive = true;
+            await RefreshRecommendationAsync();
             _temperatureRestoreMode = NormalizeMode(_featureSettings.LastMode, "balanced");
             _systemIntegration.Notify(new UserNotification(
                 IsChinese ? "温度保护已触发" : "Temperature protection triggered",
@@ -266,7 +323,10 @@ public sealed partial class MainWindow
                     "saver",
                     new SwitchRequestContext("temperature", $"{temperature:F1} °C ≥ {_featureSettings.TemperatureLimitCelsius:F1} °C", AllowPreview: false));
                 if (!succeeded)
+                {
                     _temperatureProtectionActive = false;
+                    await RefreshRecommendationAsync();
+                }
             }
             finally
             {
@@ -306,6 +366,7 @@ public sealed partial class MainWindow
                 if (succeeded)
                 {
                     _temperatureProtectionActive = false;
+                    await RefreshRecommendationAsync();
                     _systemIntegration.Notify(new UserNotification(
                         IsChinese ? "温度已恢复" : "Temperature recovered",
                         IsChinese ? $"已恢复到 {restoreMode} 模式。" : $"Restored the {restoreMode} mode.",
@@ -409,6 +470,7 @@ public sealed partial class MainWindow
         var succeeded = false;
         string? error = null;
         _modeSwitchInProgress = true;
+        RenderRecommendation();
         BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
         StatusText.Text = IsChinese
             ? $"正在切换到“{GetModeDisplayName(targetMode)}”…"
@@ -499,11 +561,12 @@ public sealed partial class MainWindow
         finally
         {
             stopwatch.Stop();
-            if (_featureSettings.OperationHistoryEnabled)
+            if (_featureSettings.OperationHistoryEnabled && context.RecordHistory)
             {
                 await RecordSwitchHistoryAsync(new SwitchHistoryEntry
                 {
                     Timestamp = DateTimeOffset.Now,
+                    OperationKind = "mode-switch",
                     PreviousMode = previousMode,
                     TargetMode = targetMode,
                     Trigger = context.Trigger,
@@ -521,6 +584,7 @@ public sealed partial class MainWindow
                 _modeSwitchInProgress = false;
                 Interlocked.CompareExchange(ref _modeSwitchCancellation, null, cancellation);
                 BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                RenderRecommendation();
                 if (succeeded)
                     _ = RefreshStatusAfterModeSwitchAsync(generation);
             }
@@ -577,6 +641,140 @@ public sealed partial class MainWindow
         _ => mode
     };
 
+    private RecommendationContext CreateRecommendationContext()
+    {
+        RecommendationPowerState powerState;
+        try
+        {
+            var succeeded = Native.GetSystemPowerStatus(out var power);
+            powerState = RecommendationUiLogic.CreatePowerState(
+                succeeded,
+                power.ACLineStatus,
+                power.BatteryLifePercent);
+        }
+        catch
+        {
+            powerState = new RecommendationPowerState(null, null);
+        }
+
+        var runningProcessNames = new List<string>();
+        var runningProcessesAvailable = true;
+        Process[] processes;
+        try
+        {
+            processes = Process.GetProcesses();
+        }
+        catch
+        {
+            processes = [];
+            runningProcessesAvailable = false;
+        }
+
+        foreach (var process in processes)
+        {
+            using (process)
+            {
+                try
+                {
+                    runningProcessNames.Add(process.ProcessName);
+                }
+                catch
+                {
+                    // Processes can exit while their names are being read.
+                }
+            }
+        }
+
+        return RecommendationUiLogic.CreateContext(
+            _featureSettings,
+            _hardwareCapabilities,
+            _temperatureProtectionActive,
+            powerState,
+            runningProcessNames,
+            DateTimeOffset.Now,
+            runningProcessesAvailable);
+    }
+
+    private Task RefreshRecommendationAsync()
+    {
+        var context = CreateRecommendationContext();
+        if (!RecommendationUiLogic.NeedsRefresh(_recommendationContext, context))
+            return Task.CompletedTask;
+
+        _recommendationContext = context;
+        _currentRecommendation = ModeRecommendationService.Recommend(context);
+        RenderRecommendation();
+        return Task.CompletedTask;
+    }
+
+    private void RenderRecommendation()
+    {
+        if (_currentRecommendation is not { } recommendation ||
+            RecommendationTitle is null ||
+            RecommendationReason is null ||
+            ApplyRecommendationButton is null)
+            return;
+
+        var presentation = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            GetModeDisplayName(recommendation.Mode),
+            IsChinese);
+        var applyState = RecommendationUiLogic.CreateApplyButtonState(
+            recommendation,
+            _featureSettings.LastMode,
+            _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
+            IsChinese);
+        RecommendationTitle.Text = presentation.Title;
+        RecommendationReason.Text = presentation.Reason;
+        ApplyRecommendationButton.Content = applyState.Text;
+        ApplyRecommendationButton.IsEnabled = applyState.IsEnabled;
+        AutomationProperties.SetName(ApplyRecommendationButton, applyState.Text);
+        AutomationProperties.SetHelpText(
+            ApplyRecommendationButton,
+            presentation.AutomationHelpText);
+    }
+
+    private async void ApplyRecommendationButton_Click(
+        object sender,
+        Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        if (_currentRecommendation is not { } recommendation)
+            return;
+
+        var state = RecommendationUiLogic.CreateApplyButtonState(
+            recommendation,
+            _featureSettings.LastMode,
+            _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
+            IsChinese);
+        if (!state.IsEnabled)
+            return;
+
+        try
+        {
+            await _recommendationApplyGate.TryRunAsync(async () =>
+            {
+                RenderRecommendation();
+                var presentation = RecommendationUiLogic.CreatePresentation(
+                    recommendation,
+                    GetModeDisplayName(recommendation.Mode),
+                    IsChinese);
+                var request = RecommendationUiLogic.CreateApplyRequest(
+                    recommendation,
+                    presentation.Reason);
+                await RunModeWithContextAsync(
+                    request.Mode,
+                    new SwitchRequestContext(
+                        request.Trigger,
+                        request.Reason,
+                        AllowPreview: request.AllowPreview));
+            });
+        }
+        finally
+        {
+            RenderRecommendation();
+        }
+    }
+
     private void InsightsButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
         if (_insightsWindow is not null)
@@ -594,18 +792,59 @@ public sealed partial class MainWindow
         _insightsWindow.Activate();
     }
 
+    private void OpenRecoveryCenterButton_Click(
+        object sender,
+        Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        if (_recoveryCenterWindow is not null)
+        {
+            _recoveryCenterWindow.Activate();
+            return;
+        }
+
+        var window = new RecoveryCenterWindow(this, IsChinese);
+        _recoveryCenterWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_recoveryCenterWindow, window))
+                _recoveryCenterWindow = null;
+        };
+        window.Activate();
+    }
+
     private void DisposeAdvancedFeatures()
     {
         if (!_advancedFeaturesInitialized)
             return;
 
         _advancedFeaturesInitialized = false;
+        _recoveryLifetimeCancellation.Cancel();
         try { _modeSwitchCancellation?.Cancel(); } catch { }
         try { _insightsWindow?.Close(); } catch { }
         _insightsWindow = null;
+        try { _recoveryCenterWindow?.Close(); } catch { }
+        _recoveryCenterWindow = null;
+        var recoveryService = _recoveryService;
+        _recoveryService = null;
         _monitoringService.SampleAvailable -= MonitoringService_SampleAvailable;
         _monitoringService.SamplingFailed -= MonitoringService_SamplingFailed;
-        _ = _monitoringService.DisposeAsync();
+        _ = DisposeAdvancedResourcesWhenRecoveryIdleAsync(recoveryService);
+    }
+
+    private async Task DisposeAdvancedResourcesWhenRecoveryIdleAsync(
+        RecoveryService? recoveryService)
+    {
+        try
+        {
+            if (recoveryService is not null)
+                await recoveryService.WaitForIdleAsync();
+        }
+        catch
+        {
+            // Shutdown still needs to release owned resources.
+        }
+        await _monitoringService.DisposeAsync();
         _systemIntegration.Dispose();
+        _recoveryLifetimeCancellation.Dispose();
     }
 }

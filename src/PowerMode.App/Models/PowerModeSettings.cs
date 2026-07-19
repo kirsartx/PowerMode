@@ -4,6 +4,7 @@ namespace PowerModeWinUI;
 
 public sealed class PowerModeSettings
 {
+    public ExperienceMode ExperienceMode { get; set; } = ExperienceMode.Simple;
     public bool AutoSwitchEnabled { get; set; }
     public bool RealTimeMonitoringEnabled { get; set; }
     public bool RestorePlanOnExit { get; set; }
@@ -55,6 +56,16 @@ public static class SettingsStore
         try { lock(FileGate)return Normalize(File.Exists(FilePath) ? JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(FilePath), JsonOptions) : null); }
         catch { return new PowerModeSettings(); }
     }
+    public static PowerModeSettings LoadStrict(string? path = null)
+    {
+        lock (FileGate)
+        {
+            var source = Path.GetFullPath(path ?? FilePath);
+            if (!File.Exists(source))
+                throw new FileNotFoundException("PowerMode settings file was not found.", source);
+            return DeserializeStrict(File.ReadAllText(source));
+        }
+    }
     public static void Save(PowerModeSettings settings)
     {
         lock(FileGate)
@@ -67,9 +78,18 @@ public static class SettingsStore
     }
     public static void Export(PowerModeSettings settings, string path) { lock(FileGate)File.WriteAllText(path, JsonSerializer.Serialize(Normalize(settings), JsonOptions)); }
     public static PowerModeSettings Import(string path) { lock(FileGate)return Normalize(JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(path), JsonOptions)); }
-    private static PowerModeSettings Normalize(PowerModeSettings? settings)
+    internal static PowerModeSettings DeserializeStrict(string json)
     {
-        settings ??= new(); settings.Profiles ??= []; settings.Rules ??= []; settings.RemoteProcesses ??= string.Empty; settings.PerformanceProcesses ??= string.Empty;
+        var settings = JsonSerializer.Deserialize<PowerModeSettings>(json, JsonOptions)
+            ?? throw new InvalidDataException("PowerMode settings JSON cannot be null.");
+        return Normalize(settings);
+    }
+    internal static PowerModeSettings Normalize(PowerModeSettings? settings)
+    {
+        settings ??= new();
+        if (!Enum.IsDefined(settings.ExperienceMode))
+            settings.ExperienceMode = ExperienceMode.Simple;
+        settings.Profiles ??= []; settings.Rules ??= []; settings.RemoteProcesses ??= string.Empty; settings.PerformanceProcesses ??= string.Empty;
         settings.MonitorIntervalSeconds = Math.Max(10, settings.MonitorIntervalSeconds);
         settings.LowBatteryThreshold = Math.Clamp(settings.LowBatteryThreshold, 5, 95);
         settings.TemperatureLimitCelsius = Math.Clamp(settings.TemperatureLimitCelsius, 50, 110);

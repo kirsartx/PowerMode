@@ -505,6 +505,9 @@ public sealed class SwitchHistoryEntry
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.Now;
+    public string OperationKind { get; set; } = "mode-switch";
+    public Guid? RelatedOperationId { get; set; }
+    public bool IsUndo { get; set; }
     public string PreviousMode { get; set; } = string.Empty;
     public string TargetMode { get; set; } = string.Empty;
     public string Trigger { get; set; } = "manual";
@@ -520,7 +523,7 @@ public sealed class SwitchHistoryEntry
 /// Thread-safe JSONL switch history. GetRecentAsync returns newest entries first.
 /// Malformed lines are ignored so one interrupted write cannot hide older history.
 /// </summary>
-public sealed class HistoryStore
+public sealed class HistoryStore : IRecoveryHistory
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileGates =
         new(StringComparer.OrdinalIgnoreCase);
@@ -538,11 +541,21 @@ public sealed class HistoryStore
     public static HistoryStore Default { get; } = new();
 
     private readonly SemaphoreSlim _gate;
+    private readonly Func<string, string, CancellationToken, Task> _appendTextAsync;
 
     public HistoryStore(string? filePath = null)
+        : this(filePath, AppendTextAsync)
+    {
+    }
+
+    internal HistoryStore(
+        string? filePath,
+        Func<string, string, CancellationToken, Task> appendTextAsync)
     {
         FilePath = Path.GetFullPath(string.IsNullOrWhiteSpace(filePath) ? DefaultFilePath : filePath);
         _gate = FileGates.GetOrAdd(FilePath, static _ => new SemaphoreSlim(1, 1));
+        _appendTextAsync = appendTextAsync
+            ?? throw new ArgumentNullException(nameof(appendTextAsync));
     }
 
     public string FilePath { get; }
@@ -563,14 +576,58 @@ public sealed class HistoryStore
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            if (await ContainsIdUnlockedAsync(entry.Id, cancellationToken).ConfigureAwait(false))
+                return;
             var line = JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine;
-            await File.AppendAllTextAsync(FilePath, line, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await _appendTextAsync(FilePath, line, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
         }
     }
+
+    private async Task<bool> ContainsIdUnlockedAsync(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(FilePath))
+            return false;
+
+        await using var stream = new FileStream(
+            FilePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            16 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true);
+        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            try
+            {
+                var existing = JsonSerializer.Deserialize<SwitchHistoryEntry>(line, JsonOptions);
+                if (existing?.Id == id)
+                    return true;
+            }
+            catch (JsonException)
+            {
+                // Match normal history reads: one malformed line must not block later entries.
+            }
+        }
+        return false;
+    }
+
+    private static Task AppendTextAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken) =>
+        File.AppendAllTextAsync(path, contents, Utf8NoBom, cancellationToken);
 
     public async Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
         int maximumCount = 200,

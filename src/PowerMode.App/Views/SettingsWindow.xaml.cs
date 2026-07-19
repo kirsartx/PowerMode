@@ -43,8 +43,50 @@ public sealed partial class SettingsWindow : Window
         ApplyLanguage();
         InitializeRuleEditor();
         LoadSettings();
+        ApplyCapabilityPresentation(settings.ExperienceMode, owner.HardwareCapabilities);
         UpdateVendorInfo();
         Closed += (_, _) => _systemIntegration.Dispose();
+    }
+
+    internal void ApplyCapabilityPresentation(
+        ExperienceMode mode,
+        HardwareCapabilities capabilities)
+    {
+        var policy = CapabilityVisibilityPolicy.Evaluate(mode, capabilities, _zh);
+        var brightness = policy[CapabilityFeature.Brightness];
+        ApplyCapabilityPresentation(BrightnessSettingsPanel, brightness);
+        BrightnessSlider.IsEnabled = brightness.IsEnabled;
+        ApplyCapabilityPresentation(BatteryValuesExpander, policy[CapabilityFeature.BatterySettings]);
+        ApplyCapabilityPresentation(LowBatteryLabel, policy[CapabilityFeature.BatterySettings]);
+        ApplyCapabilityPresentation(LowBatteryBox, policy[CapabilityFeature.BatterySettings]);
+        ApplyCapabilityPresentation(
+            TemperatureProtectionToggle,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureLimitLabel,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureLimitBox,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureRecoveryLabel,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(
+            TemperatureRecoveryBox,
+            policy[CapabilityFeature.TemperatureProtection]);
+        ApplyCapabilityPresentation(NotificationsToggle, policy[CapabilityFeature.Notifications]);
+        ApplyCapabilityPresentation(HotkeyHint, policy[CapabilityFeature.GlobalHotkeys]);
+    }
+
+    private static void ApplyCapabilityPresentation(
+        FrameworkElement element,
+        FeaturePresentation presentation)
+    {
+        var state = CapabilityControlPresentation.Map(presentation);
+        element.Visibility = state.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (element is Control control) control.IsEnabled = state.IsEnabled;
+        ToolTipService.SetToolTip(element, state.ToolTip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(element, state.HelpText);
     }
 
     private void ApplyLanguage()
@@ -702,7 +744,7 @@ public sealed partial class SettingsWindow : Window
                 SettingsStore.FilePath, createSafetyBackup: true);
             if (!result.Succeeded)
                 throw new InvalidOperationException(result.Error ?? (_zh ? "配置恢复失败。" : "Configuration restore failed."));
-            _settings = SettingsStore.Load();
+            _settings = SettingsStore.LoadStrict();
             ApplyStartupRegistration();
             _owner.ApplyFeatureSettings(_settings);
             LoadSettings();

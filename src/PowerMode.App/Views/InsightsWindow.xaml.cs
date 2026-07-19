@@ -238,7 +238,8 @@ public sealed partial class InsightsWindow : Window
         var state = entry.Succeeded ? (_isChinese ? "成功" : "Succeeded") : (_isChinese ? "失败" : "Failed");
         var trigger = string.IsNullOrWhiteSpace(entry.RuleName) ? entry.Trigger : entry.RuleName;
         var reason = string.IsNullOrWhiteSpace(entry.Reason) ? string.Empty : $" · {entry.Reason}";
-        return $"{timestamp}  {entry.PreviousMode} → {entry.TargetMode}  [{state}] · {trigger}{reason} · {entry.DurationMilliseconds} ms";
+        var operation = RecoveryOperationFormatter.FormatOperation(entry, _isChinese);
+        return $"{timestamp}  {operation}  [{state}] · {trigger}{reason} · {entry.DurationMilliseconds} ms";
     }
 
     private async void ExportCsvButton_Click(object sender, RoutedEventArgs e)

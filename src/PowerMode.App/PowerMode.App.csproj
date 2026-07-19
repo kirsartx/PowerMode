@@ -20,6 +20,9 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="PowerMode.App.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="..\PowerMode.Cli\PowerModeSwitcher.bat" Link="PowerModeSwitcher.bat" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\README.md" Link="README.md" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

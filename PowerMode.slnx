@@ -5,4 +5,5 @@
     <Platform Name="x64" />
   </Configurations>
   <Project Path="src/PowerMode.App/PowerMode.App.csproj" />
+  <Project Path="tests/PowerMode.App.Tests/PowerMode.App.Tests.csproj" />
 </Solution>
