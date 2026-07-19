@@ -191,7 +191,7 @@ CLI 与 GUI 共用 `PowerModeSwitcher.bat`（便携包根目录或源码 `src\Po
 .\PowerModeSwitcher.bat lang en
 ```
 
-不传参数时显示交互式菜单。GUI 与 CLI 均支持中文与 English；语言偏好保存在用户配置中。
+不传参数时显示交互式菜单。GUI 与 CLI 均支持中文与 English；语言偏好保存在注册表 `HKCU\Software\PowerModeSwitcher` 的 `Language` 值中，**不在** `settings.json`。
 
 ## 自动化与保护
 

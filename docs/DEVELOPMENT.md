@@ -108,7 +108,7 @@ PowerMode/
 - **默认体验为简单模式**（`ExperienceMode.Simple`）。
 - 恢复中心「重置默认」写入 `new PowerModeSettings()`，不删除历史 JSONL 与备份目录。
 - 旧字段缺失时按属性默认值反序列化；不要引入破坏性重命名而不做兼容。
-- GUI CLI 缓存目录：`%LOCALAPPDATA%\PowerMode\Cache`（按源 BAT 哈希失效）。
+- GUI CLI 缓存目录：`%LOCALAPPDATA%\PowerMode\Cache`（按源 BAT 最后写入时间/Ticks 失效，不是内容哈希；发布时 CLI 的 SHA-256 完整性校验是独立步骤）。
 
 相关测试：`SettingsCompatibilityTests`。
 
