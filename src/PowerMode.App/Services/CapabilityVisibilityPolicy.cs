@@ -20,7 +20,7 @@ public static class CapabilityVisibilityPolicy
     public static IReadOnlyDictionary<CapabilityFeature, FeaturePresentation> Evaluate(
         ExperienceMode mode,
         HardwareCapabilities capabilities,
-        bool isChinese = true)
+        bool isChinese)
     {
         var professional = mode == ExperienceMode.Professional;
         return new Dictionary<CapabilityFeature, FeaturePresentation>

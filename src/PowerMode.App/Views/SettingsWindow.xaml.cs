@@ -82,15 +82,11 @@ public sealed partial class SettingsWindow : Window
         FrameworkElement element,
         FeaturePresentation presentation)
     {
-        element.Visibility = presentation.IsVisible ? Visibility.Visible : Visibility.Collapsed;
-        if (element is Control control) control.IsEnabled = presentation.IsEnabled;
-        element.Opacity = presentation.IsEnabled ? 1 : 0.55;
-        ToolTipService.SetToolTip(
-            element,
-            string.IsNullOrEmpty(presentation.Reason) ? null : presentation.Reason);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(
-            element,
-            presentation.Reason);
+        var state = CapabilityControlPresentation.Map(presentation);
+        element.Visibility = state.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (element is Control control) control.IsEnabled = state.IsEnabled;
+        ToolTipService.SetToolTip(element, state.ToolTip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(element, state.HelpText);
     }
 
     private void ApplyLanguage()

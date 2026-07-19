@@ -56,16 +56,16 @@ public sealed partial class RecoveryCenterWindow : Window
 
         AutomationProperties.SetName(
             UndoButton,
-            _isChinese ? "撤销最近模式切换" : "Undo latest mode switch");
+            RecoveryCenterAutomationLabels.Undo(_isChinese));
         AutomationProperties.SetName(
             RestoreButton,
-            _isChinese ? "恢复配置备份" : "Restore configuration backup");
+            RecoveryCenterAutomationLabels.Restore(_isChinese));
         AutomationProperties.SetName(
             ResetButton,
-            _isChinese ? "重置为默认设置" : "Reset to defaults");
+            RecoveryCenterAutomationLabels.Reset(_isChinese));
         AutomationProperties.SetName(
             ResultMessageText,
-            _isChinese ? "恢复操作结果" : "Recovery operation result");
+            RecoveryCenterAutomationLabels.Result(_isChinese));
     }
 
     private async void Root_Loaded(object sender, RoutedEventArgs e)

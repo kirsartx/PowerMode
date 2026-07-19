@@ -247,12 +247,11 @@ public sealed partial class MainWindow
         FrameworkElement element,
         FeaturePresentation presentation)
     {
-        element.Visibility=presentation.IsVisible?Visibility.Visible:Visibility.Collapsed;
-        if(element is Control control)control.IsEnabled=presentation.IsEnabled;
-        element.Opacity=presentation.IsEnabled?1:0.55;
-        ToolTipService.SetToolTip(
-            element,string.IsNullOrEmpty(presentation.Reason)?null:presentation.Reason);
-        AutomationProperties.SetHelpText(element,presentation.Reason);
+        var state=CapabilityControlPresentation.Map(presentation);
+        element.Visibility=state.IsVisible?Visibility.Visible:Visibility.Collapsed;
+        if(element is Control control)control.IsEnabled=state.IsEnabled;
+        ToolTipService.SetToolTip(element,state.ToolTip);
+        AutomationProperties.SetHelpText(element,state.HelpText);
     }
 
     private static class Native
