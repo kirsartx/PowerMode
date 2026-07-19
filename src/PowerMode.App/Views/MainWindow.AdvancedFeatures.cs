@@ -18,6 +18,7 @@ public sealed partial class MainWindow
     private InsightsWindow? _insightsWindow;
     private RecoveryCenterWindow? _recoveryCenterWindow;
     private RecoveryService? _recoveryService;
+    private readonly CancellationTokenSource _recoveryLifetimeCancellation = new();
     private long _modeSwitchGeneration;
     private bool _modeSwitchInProgress;
     private bool _advancedFeaturesInitialized;
@@ -71,6 +72,7 @@ public sealed partial class MainWindow
 
     internal MonitoringService SharedMonitoringService => _monitoringService;
     internal SystemIntegrationService SharedSystemIntegrationService => _systemIntegration;
+    internal CancellationToken RecoveryLifetimeToken => _recoveryLifetimeCancellation.Token;
 
     private async Task RunStartupFeaturesAsync()
     {
@@ -120,44 +122,52 @@ public sealed partial class MainWindow
     internal IReadOnlyList<ConfigurationBackupInfo> ListSettingsBackups() =>
         _systemIntegration.ListConfigurationBackups();
 
-    internal ConfigurationBackupInfo? GetLatestDistinctSettingsBackup()
+    internal RecoveryBackupAvailability GetLatestDistinctSettingsBackup() =>
+        RecoveryBackupSelector.FindLatestDistinct(
+            _systemIntegration.ListConfigurationBackups(),
+            SettingsStore.FilePath);
+
+    internal Task<RecoveryActionResult> RestoreSettingsBackupAsync(
+        ConfigurationBackupInfo backup,
+        CancellationToken cancellationToken)
     {
-        var backups = _systemIntegration.ListConfigurationBackups();
-        try
-        {
-            var currentHash = File.Exists(SettingsStore.FilePath)
-                ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                    File.ReadAllBytes(SettingsStore.FilePath)))
-                : string.Empty;
-            return backups.FirstOrDefault(backup =>
-                !string.Equals(backup.Sha256, currentHash, StringComparison.OrdinalIgnoreCase));
-        }
-        catch
-        {
-            return backups.FirstOrDefault();
-        }
+        ArgumentNullException.ThrowIfNull(backup);
+        return GetRecoveryService().RestoreConfigurationAsync(
+            backup.Path,
+            token => _systemIntegration.RestoreConfigurationBackupAsync(
+                backup.Path,
+                SettingsStore.FilePath,
+                createSafetyBackup: true,
+                token),
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                ApplyFeatureSettings(SettingsStore.LoadStrict());
+                return Task.CompletedTask;
+            },
+            async (restoreResult, token) =>
+            {
+                var safetyBackup = restoreResult.SafetyBackup
+                    ?? throw new InvalidOperationException(
+                        "A safety backup is required to roll back configuration restore.");
+                var rollback = await _systemIntegration.RestoreConfigurationBackupAsync(
+                    safetyBackup.Path,
+                    SettingsStore.FilePath,
+                    createSafetyBackup: false,
+                    token);
+                if (!rollback.Succeeded)
+                    throw new IOException(rollback.Error ?? "Configuration rollback failed.");
+                ApplyFeatureSettings(SettingsStore.LoadStrict());
+            },
+            cancellationToken);
     }
 
-    internal async Task<ConfigurationRestoreResult?> RestoreLatestSettingsBackupAsync()
-    {
-        var latest = GetLatestDistinctSettingsBackup();
-        if (latest is null)
-            return null;
+    internal Task<SwitchHistoryEntry?> FindLatestUndoableModeOperationAsync(
+        CancellationToken cancellationToken) =>
+        GetRecoveryService().FindLatestUndoableAsync(cancellationToken);
 
-        var result = await _systemIntegration.RestoreConfigurationBackupAsync(
-            latest.Path,
-            SettingsStore.FilePath,
-            createSafetyBackup: true);
-        if (result.Succeeded)
-            ApplyFeatureSettings(SettingsStore.Load());
-        await GetRecoveryService().RecordConfigurationRestoreAsync(result);
-        return result;
-    }
-
-    internal Task<SwitchHistoryEntry?> FindLatestUndoableModeOperationAsync() =>
-        GetRecoveryService().FindLatestUndoableAsync();
-
-    internal Task<bool> UndoLatestModeOperationAsync() =>
+    internal Task<RecoveryActionResult> UndoLatestModeOperationAsync(
+        CancellationToken cancellationToken) =>
         GetRecoveryService().UndoLatestAsync(
             (mode, _) => RunModeWithContextAsync(
                 mode,
@@ -166,14 +176,17 @@ public sealed partial class MainWindow
                     IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
                     AllowPreview: false,
                     RecordHistory: false)),
-            IsChinese ? "撤销最近模式切换" : "Undo latest mode switch");
+            IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
+            cancellationToken);
 
-    internal async Task ResetSettingsDefaultsAsync()
-    {
-        await GetRecoveryService().ResetDefaultsAsync();
-        ApplyFeatureSettings(SettingsStore.Load());
-        await GetRecoveryService().RecordConfigurationResetAsync();
-    }
+    internal Task<RecoveryActionResult> ResetSettingsDefaultsAsync(
+        CancellationToken cancellationToken) =>
+        GetRecoveryService().ResetDefaultsAsync(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            ApplyFeatureSettings(SettingsStore.LoadStrict());
+            return Task.CompletedTask;
+        }, cancellationToken);
 
     private RecoveryService GetRecoveryService() =>
         _recoveryService ?? throw new InvalidOperationException(
@@ -789,9 +802,14 @@ public sealed partial class MainWindow
             return;
         }
 
-        _recoveryCenterWindow = new RecoveryCenterWindow(this, IsChinese);
-        _recoveryCenterWindow.Closed += (_, _) => _recoveryCenterWindow = null;
-        _recoveryCenterWindow.Activate();
+        var window = new RecoveryCenterWindow(this, IsChinese);
+        _recoveryCenterWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_recoveryCenterWindow, window))
+                _recoveryCenterWindow = null;
+        };
+        window.Activate();
     }
 
     private void DisposeAdvancedFeatures()
@@ -800,15 +818,33 @@ public sealed partial class MainWindow
             return;
 
         _advancedFeaturesInitialized = false;
+        _recoveryLifetimeCancellation.Cancel();
         try { _modeSwitchCancellation?.Cancel(); } catch { }
         try { _insightsWindow?.Close(); } catch { }
         _insightsWindow = null;
         try { _recoveryCenterWindow?.Close(); } catch { }
         _recoveryCenterWindow = null;
+        var recoveryService = _recoveryService;
         _recoveryService = null;
         _monitoringService.SampleAvailable -= MonitoringService_SampleAvailable;
         _monitoringService.SamplingFailed -= MonitoringService_SamplingFailed;
-        _ = _monitoringService.DisposeAsync();
+        _ = DisposeAdvancedResourcesWhenRecoveryIdleAsync(recoveryService);
+    }
+
+    private async Task DisposeAdvancedResourcesWhenRecoveryIdleAsync(
+        RecoveryService? recoveryService)
+    {
+        try
+        {
+            if (recoveryService is not null)
+                await recoveryService.WaitForIdleAsync();
+        }
+        catch
+        {
+            // Shutdown still needs to release owned resources.
+        }
+        await _monitoringService.DisposeAsync();
         _systemIntegration.Dispose();
+        _recoveryLifetimeCancellation.Dispose();
     }
 }

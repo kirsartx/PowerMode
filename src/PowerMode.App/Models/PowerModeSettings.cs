@@ -56,6 +56,16 @@ public static class SettingsStore
         try { lock(FileGate)return Normalize(File.Exists(FilePath) ? JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(FilePath), JsonOptions) : null); }
         catch { return new PowerModeSettings(); }
     }
+    public static PowerModeSettings LoadStrict(string? path = null)
+    {
+        lock (FileGate)
+        {
+            var source = Path.GetFullPath(path ?? FilePath);
+            if (!File.Exists(source))
+                throw new FileNotFoundException("PowerMode settings file was not found.", source);
+            return DeserializeStrict(File.ReadAllText(source));
+        }
+    }
     public static void Save(PowerModeSettings settings)
     {
         lock(FileGate)
@@ -68,6 +78,12 @@ public static class SettingsStore
     }
     public static void Export(PowerModeSettings settings, string path) { lock(FileGate)File.WriteAllText(path, JsonSerializer.Serialize(Normalize(settings), JsonOptions)); }
     public static PowerModeSettings Import(string path) { lock(FileGate)return Normalize(JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(path), JsonOptions)); }
+    internal static PowerModeSettings DeserializeStrict(string json)
+    {
+        var settings = JsonSerializer.Deserialize<PowerModeSettings>(json, JsonOptions)
+            ?? throw new InvalidDataException("PowerMode settings JSON cannot be null.");
+        return Normalize(settings);
+    }
     internal static PowerModeSettings Normalize(PowerModeSettings? settings)
     {
         settings ??= new();

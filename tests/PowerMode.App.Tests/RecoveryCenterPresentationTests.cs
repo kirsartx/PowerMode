@@ -62,32 +62,74 @@ public sealed class RecoveryCenterPresentationTests
     }
 
     [Fact]
-    public void MainWindow_ConfigurationRecoveryAppliesBeforeRecordingOperation()
+    public void MainWindow_ConfigurationRecoveryUsesStrictReloadAndAuditedService()
     {
         var source = File.ReadAllText(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
 
-        var restore = source.IndexOf("RestoreConfigurationBackupAsync(", StringComparison.Ordinal);
-        var restoreApply = source.IndexOf(
-            "ApplyFeatureSettings(SettingsStore.Load())",
-            restore,
-            StringComparison.Ordinal);
-        var restoreRecord = source.IndexOf(
-            "RecordConfigurationRestoreAsync(result)",
-            restore,
-            StringComparison.Ordinal);
-        Assert.True(restore >= 0 && restoreApply > restore && restoreRecord > restoreApply);
+        Assert.Contains("RestoreConfigurationAsync(", source);
+        Assert.Contains("ResetDefaultsAsync(", source);
+        Assert.True(
+            CountOccurrences(source, "ApplyFeatureSettings(SettingsStore.LoadStrict())") >= 2,
+            "Configuration recovery must strictly reload and apply both restored and reset settings.");
+        Assert.DoesNotContain("RecordConfigurationRestoreAsync", source);
+        Assert.DoesNotContain("RecordConfigurationResetAsync", source);
+    }
 
-        var reset = source.IndexOf("ResetSettingsDefaultsAsync()", StringComparison.Ordinal);
-        var resetApply = source.IndexOf(
-            "ApplyFeatureSettings(SettingsStore.Load())",
-            reset,
+    [Fact]
+    public void RecoveryCenter_AcquiresBusyBeforeConfirmationAndCatchesDialogFailures()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "RecoveryCenterWindow.xaml.cs"));
+
+        Assert.Contains("TryBeginOperation", source);
+        Assert.DoesNotContain("!await ConfirmAsync", source);
+        Assert.Contains("catch (Exception ex)", source);
+        Assert.Contains("RefreshAvailabilityAsync(showProgress: false)", source);
+        Assert.Contains("TryUpdatePresentation(() => SetBusy(false))", source);
+        foreach (var handler in new[]
+                 {
+                     "UndoButton_Click",
+                     "RestoreButton_Click",
+                     "ResetButton_Click"
+                 })
+        {
+            var start = source.IndexOf(handler, StringComparison.Ordinal);
+            var end = source.IndexOf("\n    private ", start + handler.Length, StringComparison.Ordinal);
+            var body = source[start..(end < 0 ? source.Length : end)];
+            Assert.True(
+                body.IndexOf("TryBeginOperation", StringComparison.Ordinal)
+                < body.IndexOf("await ConfirmAsync", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void RecoveryCenter_CloseCancelsLifetimeAndAvailabilityUsesClearedLocals()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "RecoveryCenterWindow.xaml.cs"));
+
+        Assert.Contains("CancellationTokenSource.CreateLinkedTokenSource", source);
+        Assert.Contains("RecoveryCenterWindow_Closed", source);
+        Assert.Contains("_latestUndo = null;", source);
+        Assert.Contains("_latestBackup = null;", source);
+        Assert.Contains("var latestUndo", source);
+        Assert.Contains("var backupAvailability", source);
+        Assert.Contains("TryUpdatePresentation", source);
+    }
+
+    [Fact]
+    public void MainWindow_CloseCancelsRecoveryAndDefersIntegrationDisposalUntilIdle()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
+
+        var cancel = source.IndexOf(
+            "_recoveryLifetimeCancellation.Cancel()",
             StringComparison.Ordinal);
-        var resetRecord = source.IndexOf(
-            "RecordConfigurationResetAsync()",
-            reset,
-            StringComparison.Ordinal);
-        Assert.True(reset >= 0 && resetApply > reset && resetRecord > resetApply);
+        var wait = source.IndexOf("WaitForIdleAsync", cancel, StringComparison.Ordinal);
+        var dispose = source.IndexOf("_systemIntegration.Dispose()", wait, StringComparison.Ordinal);
+        Assert.True(cancel >= 0 && wait > cancel && dispose > wait);
     }
 
     private static string FindRepositoryFile(params string[] path)
@@ -100,5 +142,17 @@ public sealed class RecoveryCenterPresentationTests
                 return Path.Combine([directory.FullName, .. path]);
         }
         throw new DirectoryNotFoundException("Could not locate the PowerMode repository root.");
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = source.IndexOf(value, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += value.Length;
+        }
+        return count;
     }
 }

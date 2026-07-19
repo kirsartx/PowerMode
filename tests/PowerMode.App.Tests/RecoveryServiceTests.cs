@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Xunit;
 
 namespace PowerModeWinUI.Tests;
@@ -24,6 +25,28 @@ public sealed class RecoveryServiceTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HistoryStore_RecordAsync_SameIdAppendsOnlyOnce()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"powermode-recovery-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "switch-history.jsonl");
+        var store = new HistoryStore(path);
+        var entry = ModeSwitch("balanced", "high");
+
+        try
+        {
+            await store.RecordAsync(entry);
+            await store.RecordAsync(entry);
+
+            Assert.Single(await store.GetRecentAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -173,7 +196,7 @@ public sealed class RecoveryServiceTests
         var backend = new FakeRecoveryBackend(pauseBackup: true);
         var service = new RecoveryService(new InMemoryRecoveryHistory([]), backend);
 
-        var resetTask = service.ResetDefaultsAsync();
+        var resetTask = service.ResetDefaultsAsync(_ => Task.CompletedTask);
 
         Assert.Equal(["backup:before-reset-defaults"], backend.Calls);
         Assert.False(resetTask.IsCompleted);
@@ -194,8 +217,10 @@ public sealed class RecoveryServiceTests
             _ => saved = true);
         var service = new RecoveryService(history, backend);
 
-        await Assert.ThrowsAsync<IOException>(() => service.ResetDefaultsAsync());
+        var result = await service.ResetDefaultsAsync(_ => Task.CompletedTask);
 
+        Assert.False(result.MutationSucceeded);
+        Assert.Contains("backup failed", result.Error);
         Assert.False(saved);
         Assert.Empty(history.RecordedEntries);
     }
@@ -218,8 +243,9 @@ public sealed class RecoveryServiceTests
             });
         var service = new RecoveryService(new InMemoryRecoveryHistory([]), backend);
 
-        await service.ResetDefaultsAsync();
+        var result = await service.ResetDefaultsAsync(_ => Task.CompletedTask);
 
+        Assert.True(result.Succeeded);
         Assert.Equal(["backup:before-reset-defaults", "save-defaults"], calls);
         Assert.NotNull(saved);
         Assert.Equal(ExperienceMode.Simple, saved.ExperienceMode);
@@ -227,49 +253,169 @@ public sealed class RecoveryServiceTests
     }
 
     [Fact]
-    public async Task ResetDefaultsAsync_DoesNotRecordResetBeforeCallerAppliesSettings()
+    public async Task ResetDefaultsAsync_StrictReloadFailureDoesNotReportSuccess()
     {
         var history = new InMemoryRecoveryHistory([]);
         var service = new RecoveryService(history, new FakeRecoveryBackend());
 
-        await service.ResetDefaultsAsync();
+        var result = await service.ResetDefaultsAsync(
+            _ => Task.FromException(new JsonException("invalid saved settings")));
 
+        Assert.False(result.MutationSucceeded);
+        Assert.False(result.AuditSucceeded);
+        Assert.Contains("invalid saved settings", result.Error);
         Assert.Empty(history.RecordedEntries);
     }
 
     [Fact]
-    public async Task RecordConfigurationResetAsync_UsesExplicitOperationKind()
+    public async Task ResetDefaultsAsync_AuditFailureRetryDoesNotRepeatMutation()
     {
-        var history = new InMemoryRecoveryHistory([]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var history = new FailOnceRecoveryHistory([]);
+        var backend = new FakeRecoveryBackend();
+        var service = new RecoveryService(history, backend);
+        var reloadCount = 0;
 
-        await service.RecordConfigurationResetAsync();
+        var first = await service.ResetDefaultsAsync(_ =>
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        });
+        var second = await service.ResetDefaultsAsync(_ =>
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        });
 
+        Assert.True(first.MutationSucceeded);
+        Assert.False(first.AuditSucceeded);
+        Assert.True(second.Succeeded);
+        Assert.Equal(["backup:before-reset-defaults", "save-defaults"], backend.Calls);
+        Assert.Equal(1, reloadCount);
         var entry = Assert.Single(history.RecordedEntries);
         Assert.Equal("configuration-reset", entry.OperationKind);
-        Assert.True(entry.Succeeded);
-        Assert.Equal("recovery-center", entry.Trigger);
     }
 
     [Fact]
-    public async Task RecordConfigurationRestoreAsync_UsesExplicitOperationKind()
+    public async Task RestoreConfigurationAsync_AuditFailureRetryDoesNotRepeatMutation()
     {
-        var history = new InMemoryRecoveryHistory([]);
+        var history = new FailOnceRecoveryHistory([]);
         var service = new RecoveryService(history, new FakeRecoveryBackend());
-        var result = new ConfigurationRestoreResult(
+        var restoreCount = 0;
+        var reloadCount = 0;
+        var restoreResult = new ConfigurationRestoreResult(
             true,
             "settings.json",
             "settings.backup.json",
             null,
             null);
 
-        await service.RecordConfigurationRestoreAsync(result);
+        Task<ConfigurationRestoreResult> Restore(CancellationToken _)
+        {
+            restoreCount++;
+            return Task.FromResult(restoreResult);
+        }
 
+        Task Reload(CancellationToken _)
+        {
+            reloadCount++;
+            return Task.CompletedTask;
+        }
+
+        var first = await service.RestoreConfigurationAsync(
+            "settings.backup.json",
+            Restore,
+            Reload,
+            (_, _) => Task.CompletedTask);
+        var second = await service.RestoreConfigurationAsync(
+            "settings.backup.json",
+            Restore,
+            Reload,
+            (_, _) => Task.CompletedTask);
+
+        Assert.True(first.MutationSucceeded);
+        Assert.False(first.AuditSucceeded);
+        Assert.True(second.Succeeded);
+        Assert.Equal(1, restoreCount);
+        Assert.Equal(1, reloadCount);
         var entry = Assert.Single(history.RecordedEntries);
         Assert.Equal("configuration-restore", entry.OperationKind);
-        Assert.True(entry.Succeeded);
         Assert.Equal("settings.backup.json", entry.TargetMode);
-        Assert.Equal("recovery-center", entry.Trigger);
+    }
+
+    [Fact]
+    public async Task RestoreConfigurationAsync_StrictReloadFailureRollsBackAndDoesNotAudit()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var rollbackCount = 0;
+        var restoreResult = new ConfigurationRestoreResult(
+            true,
+            "settings.json",
+            "settings.backup.json",
+            new ConfigurationBackupInfo(
+                "safety.json",
+                "safety.json",
+                DateTimeOffset.UtcNow,
+                10,
+                "ABC"),
+            null);
+
+        var result = await service.RestoreConfigurationAsync(
+            "settings.backup.json",
+            _ => Task.FromResult(restoreResult),
+            _ => Task.FromException(new JsonException("strict reload failed")),
+            (_, _) =>
+            {
+                rollbackCount++;
+                return Task.CompletedTask;
+            });
+
+        Assert.False(result.MutationSucceeded);
+        Assert.False(result.AuditSucceeded);
+        Assert.Contains("strict reload failed", result.Error);
+        Assert.Equal(1, rollbackCount);
+        Assert.Empty(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task RestoreConfigurationAsync_CancellationDuringStrictReloadStillRollsBack()
+    {
+        var history = new InMemoryRecoveryHistory([]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        using var cancellation = new CancellationTokenSource();
+        var rollbackCount = 0;
+        var restoreResult = new ConfigurationRestoreResult(
+            true,
+            "settings.json",
+            "settings.backup.json",
+            new ConfigurationBackupInfo(
+                "safety.json",
+                "safety.json",
+                DateTimeOffset.UtcNow,
+                10,
+                "ABC"),
+            null);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.RestoreConfigurationAsync(
+                "settings.backup.json",
+                _ => Task.FromResult(restoreResult),
+                token =>
+                {
+                    cancellation.Cancel();
+                    token.ThrowIfCancellationRequested();
+                    return Task.CompletedTask;
+                },
+                (_, rollbackToken) =>
+                {
+                    Assert.False(rollbackToken.IsCancellationRequested);
+                    rollbackCount++;
+                    return Task.CompletedTask;
+                },
+                cancellation.Token));
+
+        Assert.Equal(1, rollbackCount);
+        Assert.Empty(history.RecordedEntries);
     }
 
     [Fact]
@@ -288,7 +434,8 @@ public sealed class RecoveryServiceTests
             },
             "Undo latest mode switch");
 
-        Assert.True(result);
+        Assert.True(result.MutationSucceeded);
+        Assert.True(result.AuditSucceeded);
         Assert.Equal(["balanced"], executedModes);
         var undo = Assert.Single(history.RecordedEntries);
         Assert.Equal("mode-undo", undo.OperationKind);
@@ -298,6 +445,171 @@ public sealed class RecoveryServiceTests
         Assert.Equal(original.TargetMode, undo.PreviousMode);
         Assert.Equal(original.PreviousMode, undo.TargetMode);
         Assert.Equal("recovery-center", undo.Trigger);
+    }
+
+    [Fact]
+    public async Task UndoLatestAsync_ConcurrentCallsExecuteMutationOnce()
+    {
+        var original = ModeSwitch("balanced", "high");
+        var history = new InMemoryRecoveryHistory([original]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var mutationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMutation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executionCount = 0;
+
+        Task<bool> ExecuteAsync(string mode, CancellationToken token)
+        {
+            Interlocked.Increment(ref executionCount);
+            mutationEntered.TrySetResult();
+            return WaitAndSucceedAsync(releaseMutation.Task, token);
+        }
+
+        var first = service.UndoLatestAsync(ExecuteAsync, "Undo latest mode switch");
+        await mutationEntered.Task;
+        var second = service.UndoLatestAsync(ExecuteAsync, "Undo latest mode switch");
+        Assert.False(second.IsCompleted);
+
+        releaseMutation.TrySetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, executionCount);
+        Assert.Single(history.RecordedEntries, entry => entry.OperationKind == "mode-undo");
+    }
+
+    [Fact]
+    public async Task WaitForIdleAsync_WaitsForRunningRecoveryMutation()
+    {
+        var original = ModeSwitch("balanced", "high");
+        var service = new RecoveryService(
+            new InMemoryRecoveryHistory([original]),
+            new FakeRecoveryBackend());
+        var mutationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMutation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var undo = service.UndoLatestAsync(
+            async (_, token) =>
+            {
+                mutationEntered.TrySetResult();
+                await releaseMutation.Task.WaitAsync(token);
+                return true;
+            },
+            "Undo latest mode switch");
+        await mutationEntered.Task;
+
+        var idle = service.WaitForIdleAsync();
+
+        Assert.False(idle.IsCompleted);
+        releaseMutation.TrySetResult();
+        await undo;
+        await idle;
+    }
+
+    [Fact]
+    public void RecoveryBackupSelector_CurrentHashFailureReturnsErrorWithoutCandidate()
+    {
+        var backup = new ConfigurationBackupInfo(
+            "backup.json",
+            "backup.json",
+            DateTimeOffset.UtcNow,
+            10,
+            "ABC");
+
+        var result = RecoveryBackupSelector.FindLatestDistinct(
+            [backup],
+            "settings.json",
+            _ => throw new IOException("settings locked"));
+
+        Assert.Null(result.Backup);
+        Assert.Contains("settings locked", result.Error);
+    }
+
+    [Fact]
+    public async Task UndoLatestAsync_ExecuteReturnsFalse_DoesNotRecordUndo()
+    {
+        var history = new InMemoryRecoveryHistory([ModeSwitch("balanced", "high")]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+
+        var result = await service.UndoLatestAsync(
+            (_, _) => Task.FromResult(false),
+            "Undo latest mode switch");
+
+        Assert.False(result.MutationSucceeded);
+        Assert.False(result.AuditSucceeded);
+        Assert.Empty(history.RecordedEntries);
+    }
+
+    [Fact]
+    public async Task UndoLatestAsync_ExecuteThrows_DoesNotRecordUndo()
+    {
+        var history = new InMemoryRecoveryHistory([ModeSwitch("balanced", "high")]);
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+
+        var result = await service.UndoLatestAsync(
+            (_, _) => Task.FromException<bool>(new InvalidOperationException("mode failed")),
+            "Undo latest mode switch");
+
+        Assert.False(result.MutationSucceeded);
+        Assert.False(result.AuditSucceeded);
+        Assert.Contains("mode failed", result.Error);
+        Assert.Empty(history.RecordedEntries);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UndoLatestAsync_AuditAppendFailure_RetryDoesNotRepeatMutation(
+        bool failAfterWrite)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"powermode-recovery-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "switch-history.jsonl");
+        Directory.CreateDirectory(directory);
+        var original = ModeSwitch("balanced", "high");
+        await new HistoryStore(path).RecordAsync(original);
+        var appendAttempts = 0;
+        var history = new HistoryStore(
+            path,
+            async (destination, contents, token) =>
+            {
+                appendAttempts++;
+                if (failAfterWrite)
+                    await File.AppendAllTextAsync(destination, contents, token);
+                if (appendAttempts == 1)
+                    throw new IOException(failAfterWrite ? "after write" : "before write");
+                if (!failAfterWrite)
+                    await File.AppendAllTextAsync(destination, contents, token);
+            });
+        var service = new RecoveryService(history, new FakeRecoveryBackend());
+        var executionCount = 0;
+
+        try
+        {
+            var first = await service.UndoLatestAsync(
+                (_, _) =>
+                {
+                    executionCount++;
+                    return Task.FromResult(true);
+                },
+                "Undo latest mode switch");
+            var second = await service.UndoLatestAsync(
+                (_, _) =>
+                {
+                    executionCount++;
+                    return Task.FromResult(true);
+                },
+                "Undo latest mode switch");
+
+            Assert.True(first.MutationSucceeded);
+            Assert.False(first.AuditSucceeded);
+            Assert.True(second.MutationSucceeded);
+            Assert.True(second.AuditSucceeded);
+            Assert.Equal(1, executionCount);
+            Assert.Single(
+                await history.GetRecentAsync(),
+                entry => entry.OperationKind == "mode-undo");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -362,6 +674,12 @@ public sealed class RecoveryServiceTests
             OperationKind = "mode-switch"
         };
 
+    private static async Task<bool> WaitAndSucceedAsync(Task release, CancellationToken token)
+    {
+        await release.WaitAsync(token);
+        return true;
+    }
+
     private sealed class InMemoryRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
         : IRecoveryHistory
     {
@@ -373,14 +691,19 @@ public sealed class RecoveryServiceTests
             CancellationToken cancellationToken = default)
         {
             LastMaximumCount = maximumCount;
-            return Task.FromResult<IReadOnlyList<SwitchHistoryEntry>>([.. entries.Take(maximumCount)]);
+            var combined = RecordedEntries
+                .Concat(entries)
+                .Take(maximumCount)
+                .ToArray();
+            return Task.FromResult<IReadOnlyList<SwitchHistoryEntry>>(combined);
         }
 
         public Task RecordAsync(
             SwitchHistoryEntry entry,
             CancellationToken cancellationToken = default)
         {
-            RecordedEntries.Add(entry);
+            if (RecordedEntries.All(existing => existing.Id != entry.Id))
+                RecordedEntries.Add(entry);
             return Task.CompletedTask;
         }
     }
@@ -400,6 +723,33 @@ public sealed class RecoveryServiceTests
             SwitchHistoryEntry entry,
             CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class FailOnceRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
+        : IRecoveryHistory
+    {
+        private bool _failed;
+        public List<SwitchHistoryEntry> RecordedEntries { get; } = [];
+
+        public Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
+            int maximumCount,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<SwitchHistoryEntry>>(
+                [.. RecordedEntries.Concat(entries).Take(maximumCount)]);
+
+        public Task RecordAsync(
+            SwitchHistoryEntry entry,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_failed)
+            {
+                _failed = true;
+                throw new IOException("audit unavailable");
+            }
+            if (RecordedEntries.All(existing => existing.Id != entry.Id))
+                RecordedEntries.Add(entry);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class InlineSynchronizationContext : SynchronizationContext

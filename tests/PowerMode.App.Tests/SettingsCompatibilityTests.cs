@@ -38,6 +38,52 @@ public sealed class SettingsCompatibilityTests
     }
 
     [Fact]
+    public void LoadStrict_PropertyTypeMismatch_ThrowsInsteadOfReturningDefaults()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"powermode-settings-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "settings.json");
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(path, """{"MonitorIntervalSeconds":"fast"}""");
+
+        try
+        {
+            Assert.Throws<JsonException>(() => SettingsStore.LoadStrict(path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RestoreConfigurationBackupAsync_PropertyTypeMismatchDoesNotReplaceLiveSettings()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"powermode-restore-{Guid.NewGuid():N}");
+        using var integration = new SystemIntegrationService(
+            executablePath: Environment.ProcessPath!,
+            dataDirectory: directory);
+        Directory.CreateDirectory(integration.BackupDirectory);
+        var liveJson = """{"LastMode":"balanced","MonitorIntervalSeconds":15}""";
+        await File.WriteAllTextAsync(integration.DefaultConfigurationPath, liveJson);
+        var backupPath = Path.Combine(integration.BackupDirectory, "invalid.json");
+        await File.WriteAllTextAsync(backupPath, """{"MonitorIntervalSeconds":"fast"}""");
+
+        try
+        {
+            await Assert.ThrowsAsync<JsonException>(() =>
+                integration.RestoreConfigurationBackupAsync(
+                    backupPath,
+                    integration.DefaultConfigurationPath,
+                    createSafetyBackup: true));
+            Assert.Equal(liveJson, await File.ReadAllTextAsync(integration.DefaultConfigurationPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SettingsWindow_BrightnessPresentation_UsesNamedContainer()
     {
         var document = XDocument.Load(FindRepositoryFile(

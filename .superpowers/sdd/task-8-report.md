@@ -89,3 +89,59 @@ Interactive foreground verification was intentionally not performed because the
 task prohibited launching the GUI. XAML compilation, source-structure tests,
 unit tests, and Release x64 build cover the required behavior without taking
 focus.
+
+## Changes-requested follow-up
+
+Addressed all eight recovery review findings:
+
+- Recovery mutations and availability reads now share one operation gate.
+  Completed mutations retain a stable audit entry in the service session, so
+  an append retry cannot repeat undo, restore, or reset side effects.
+- `HistoryStore.RecordAsync` checks the stable entry ID while holding its
+  per-file gate. Tests cover duplicate calls plus audit failures both before
+  and after the JSONL append.
+- Failed or throwing mode-pipeline execution never writes `mode-undo`.
+  Recovery results separately report mutation and audit phases, including
+  partial success when only the audit append fails.
+- Recovery-window work is linked to both window and owner lifetime
+  cancellation. Closing prevents every later presentation update, while main
+  shutdown waits for the recovery gate before disposing system integration.
+- Restore candidates are strictly deserialized and normalized before the live
+  file is touched. The restored file is strictly reloaded/applied, and a
+  post-restore validation or cancellation failure restores the safety backup
+  using a non-cancelled token. Reset also strictly reloads before audit.
+- The UI busy gate is acquired before showing any confirmation dialog.
+  Confirmation is inside guarded `try`/`catch`/`finally` blocks, and dialog
+  failures remain visible instead of being overwritten by an immediate
+  availability refresh.
+- Current-settings hash/read failure returns explicit unavailable state and
+  never selects a fallback backup.
+- Availability refresh clears retained undo/backup state before I/O, computes
+  into locals, and publishes only after all reads succeed. Failure therefore
+  cannot re-enable a stale Undo or Restore action.
+
+### Follow-up TDD and verification
+
+- Added regression coverage for concurrent undo, before/after-write audit
+  failures, mutation failure without audit, reset/restore partial audit
+  retries, strict settings type mismatches, restore rollback, cancellation
+  during strict reload, window lifetime/busy ordering, and stale availability.
+- Focused recovery/compatibility/presentation suite:
+  - Result: 47 passed, 0 failed.
+- Full Debug suite:
+  - `dotnet test tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Debug --no-restore`
+  - Result: 112 passed, 0 failed.
+- Full Release suite:
+  - `dotnet test tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Release --no-restore`
+  - Result: 112 passed, 0 failed.
+- Release solution build:
+  - `dotnet build PowerMode.slnx -c Release --no-restore`
+  - Result: succeeded, 0 warnings, 0 errors.
+- Final `git diff --check`:
+  - Result: clean.
+
+### Follow-up remaining concern
+
+Interactive foreground verification remains intentionally omitted because the
+task prohibits launching the GUI. The compiled WinUI project, source-structure
+gates, behavioral tests, and Debug/Release suites are green.

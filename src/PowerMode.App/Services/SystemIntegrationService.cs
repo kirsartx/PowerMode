@@ -214,15 +214,9 @@ public sealed class SystemIntegrationService : IDisposable
         var source = EnsurePathIsInside(backupPath, BackupDirectory);
         if (!File.Exists(source)) throw new FileNotFoundException("配置备份不存在。", source);
 
-        // Reject a truncated or unrelated JSON file before touching the live configuration.
-        await using (var validationStream = File.OpenRead(source))
-        using (var document = await JsonDocument.ParseAsync(
-            validationStream,
-            cancellationToken: cancellationToken).ConfigureAwait(false))
-        {
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-                throw new InvalidDataException("配置备份的 JSON 根节点必须是对象。");
-        }
+        // Use the same strict schema and normalization path as the post-restore reload.
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = SettingsStore.LoadStrict(source);
 
         var destination = Path.GetFullPath(destinationConfigurationPath ?? DefaultConfigurationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)

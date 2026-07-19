@@ -748,7 +748,7 @@ public sealed partial class SettingsWindow : Window
                 SettingsStore.FilePath, createSafetyBackup: true);
             if (!result.Succeeded)
                 throw new InvalidOperationException(result.Error ?? (_zh ? "配置恢复失败。" : "Configuration restore failed."));
-            _settings = SettingsStore.Load();
+            _settings = SettingsStore.LoadStrict();
             ApplyStartupRegistration();
             _owner.ApplyFeatureSettings(_settings);
             LoadSettings();
