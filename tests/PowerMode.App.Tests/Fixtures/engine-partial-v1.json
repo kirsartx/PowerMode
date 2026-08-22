@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "operationId": "22222222-2222-2222-2222-222222222222",
+  "action": "apply",
+  "requestedMode": "remote",
+  "startedAtUtc": "2026-08-09T00:00:00Z",
+  "durationMs": 250,
+  "outcome": "partial",
+  "steps": [
+    {
+      "name": "set-brightness",
+      "critical": false,
+      "exitCode": 1,
+      "timedOut": false,
+      "error": "Brightness is not supported."
+    }
+  ],
+  "beforeState": null,
+  "afterState": null,
+  "expectations": [
+    {
+      "field": "brightnessAcPercent",
+      "expectedValue": "50",
+      "critical": false
+    }
+  ]
+}

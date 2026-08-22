@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "operationId": "11111111-1111-1111-1111-111111111111",
+  "action": "status",
+  "requestedMode": null,
+  "startedAtUtc": "2026-08-09T00:00:00Z",
+  "durationMs": 125,
+  "outcome": "succeeded",
+  "steps": [],
+  "beforeState": null,
+  "afterState": {
+    "activeSchemeId": "381b4222-f694-41f0-9685-ff5bb260df2e",
+    "activeSchemeName": "Balanced",
+    "detectedMode": "balanced",
+    "powerSource": "ac",
+    "discreteGpuPowerWatts": 37.2,
+    "cpuMaximumAcPercent": 100,
+    "cpuMaximumDcPercent": 100,
+    "cpuMinimumAcPercent": 5,
+    "cpuMinimumDcPercent": 5,
+    "processorBoostModeAc": 2,
+    "processorBoostModeDc": 2,
+    "brightnessAcPercent": 100,
+    "brightnessDcPercent": 100,
+    "displayTimeoutAcSeconds": 600,
+    "displayTimeoutDcSeconds": 600,
+    "sleepTimeoutAcSeconds": 0,
+    "sleepTimeoutDcSeconds": 0,
+    "hibernateTimeoutAcSeconds": 0,
+    "hibernateTimeoutDcSeconds": 0
+  },
+  "expectations": []
+}

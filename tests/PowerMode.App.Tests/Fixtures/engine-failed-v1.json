@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "operationId": "33333333-3333-3333-3333-333333333333",
+  "action": "apply",
+  "requestedMode": "remote",
+  "startedAtUtc": "2026-08-09T00:00:00Z",
+  "durationMs": 300,
+  "outcome": "failed",
+  "steps": [
+    {
+      "name": "set-cpu-maximum-ac",
+      "critical": true,
+      "exitCode": 1,
+      "timedOut": false,
+      "error": "Access denied."
+    }
+  ],
+  "beforeState": null,
+  "afterState": null,
+  "expectations": [
+    {
+      "field": "cpuMaximumAcPercent",
+      "expectedValue": "32",
+      "critical": true
+    }
+  ]
+}
