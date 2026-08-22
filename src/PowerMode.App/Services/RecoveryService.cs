@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
@@ -47,6 +46,26 @@ public sealed record RecoveryActionResult(
 public sealed record RecoveryBackupAvailability(
     ConfigurationBackupInfo? Backup,
     string? Error);
+
+internal sealed record LastOperationAvailability(
+    LastOperationRecord? Record,
+    bool CanUndo,
+    bool RequiresVerification,
+    string? Error);
+
+internal interface IRecoveryOperationService
+{
+    Task<LastOperationAvailability> GetLastOperationAvailabilityAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<LastOperationVerificationResult> VerifyLastOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default);
+
+    Task<RecoveryActionResult> RestoreBeforeStateAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default);
+}
 
 public static class RecoveryBackupSelector
 {
@@ -153,25 +172,12 @@ public sealed class ProductionRecoveryBackend : IRecoveryBackend
         _restoreSafetyBackupAsync(backup, token);
 }
 
-public sealed class RecoveryService
+internal sealed class RecoveryService : IRecoveryOperationService
 {
-    /// <summary>
-    /// Recovery surfaces inspect only the most recent 2,000 persisted history entries.
-    /// This deliberately bounded contract does not perform an unlimited history scan.
-    /// </summary>
-    public const int MaximumRecoveryHistoryEntries = 2_000;
-
-    private static readonly HashSet<string> StandardModes =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            "remote",
-            "saver",
-            "balanced",
-            "high"
-        };
-
     private readonly IRecoveryHistory _history;
     private readonly IRecoveryBackend _backend;
+    private readonly ILastOperationStore? _lastOperationStore;
+    private readonly IModeSwitchCoordinator? _modeSwitchCoordinator;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly Dictionary<Guid, CompletedRecoveryOperation> _completedOperations = [];
 
@@ -181,45 +187,56 @@ public sealed class RecoveryService
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
     }
 
-    public async Task<SwitchHistoryEntry?> FindLatestUndoableAsync(
+    internal RecoveryService(
+        ILastOperationStore lastOperationStore,
+        IModeSwitchCoordinator modeSwitchCoordinator,
+        IRecoveryHistory history,
+        IRecoveryBackend backend)
+        : this(history, backend)
+    {
+        _lastOperationStore = lastOperationStore
+            ?? throw new ArgumentNullException(nameof(lastOperationStore));
+        _modeSwitchCoordinator = modeSwitchCoordinator
+            ?? throw new ArgumentNullException(nameof(modeSwitchCoordinator));
+    }
+
+    public async Task<LastOperationAvailability> GetLastOperationAvailabilityAsync(
         CancellationToken cancellationToken = default)
     {
-        await _operationGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await FindLatestUndoableCoreAsync(cancellationToken);
-        }
-        finally
-        {
-            _operationGate.Release();
-        }
+        var store = _lastOperationStore ?? throw new InvalidOperationException(
+            "Last-operation recovery is not configured.");
+        var read = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!read.Succeeded)
+            return new(null, false, false, read.Error);
+        if (read.Record is not { } record)
+            return new(null, false, false, null);
+
+        return new(
+            record,
+            record.Status == LastOperationStatus.Verified,
+            record.Status is LastOperationStatus.Prepared or
+                LastOperationStatus.Applying or
+                LastOperationStatus.Uncertain,
+            null);
     }
 
-    private async Task<SwitchHistoryEntry?> FindLatestUndoableCoreAsync(
-        CancellationToken cancellationToken)
-    {
-        var recentEntries = await _history
-            .GetRecentAsync(MaximumRecoveryHistoryEntries, cancellationToken)
-            .ConfigureAwait(false);
-        var entries = recentEntries
-            .OrderByDescending(entry => entry.Timestamp)
-            .ToArray();
-        var undoneOperationIds = entries
-            .Where(entry =>
-                entry.Succeeded
-                && entry.IsUndo
-                && string.Equals(entry.OperationKind, "mode-undo", StringComparison.OrdinalIgnoreCase)
-                && entry.RelatedOperationId.HasValue)
-            .Select(entry => entry.RelatedOperationId!.Value)
-            .ToHashSet();
+    public Task<LastOperationVerificationResult> VerifyLastOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        GetModeSwitchCoordinator().VerifyLastOperationAsync(
+            operationId,
+            cancellationToken);
 
-        return entries.FirstOrDefault(entry =>
-            entry.Succeeded
-            && string.Equals(entry.OperationKind, "mode-switch", StringComparison.OrdinalIgnoreCase)
-            && StandardModes.Contains(entry.PreviousMode)
-            && StandardModes.Contains(entry.TargetMode)
-            && !undoneOperationIds.Contains(entry.Id));
-    }
+    public Task<RecoveryActionResult> RestoreBeforeStateAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        GetModeSwitchCoordinator().RestoreBeforeStateAsync(
+            operationId,
+            cancellationToken);
+
+    private IModeSwitchCoordinator GetModeSwitchCoordinator() =>
+        _modeSwitchCoordinator ?? throw new InvalidOperationException(
+            "Last-operation recovery is not configured.");
 
     public async Task<RecoveryActionResult> ResetDefaultsAsync(
         Func<CancellationToken, Task> strictReloadAndApplyAsync,
@@ -376,70 +393,6 @@ public sealed class RecoveryService
                     ? string.Empty
                     : $"Safety backup: {restoreResult.SafetyBackup.FileName}",
                 Succeeded = true
-            });
-            _completedOperations[completed.Entry.Id] = completed;
-            return await RecordCompletedOperationAsync(completed);
-        }
-        finally
-        {
-            _operationGate.Release();
-        }
-    }
-
-    public async Task<RecoveryActionResult> UndoLatestAsync(
-        Func<string, CancellationToken, Task<bool>> executeModeAsync,
-        string reason,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(executeModeAsync);
-        await _operationGate.WaitAsync(cancellationToken);
-        try
-        {
-            var pendingAudit = FindPendingAudit("mode-undo");
-            if (pendingAudit is not null)
-                return await RecordCompletedOperationAsync(pendingAudit);
-
-            var original = await FindLatestUndoableCoreAsync(cancellationToken);
-            if (original is null)
-                return new RecoveryActionResult(false, false, "No eligible mode operation is available.");
-
-            var stopwatch = Stopwatch.StartNew();
-            bool mutationSucceeded;
-            try
-            {
-                mutationSucceeded = await executeModeAsync(
-                    original.PreviousMode,
-                    cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return new RecoveryActionResult(false, false, ex.Message);
-            }
-            finally
-            {
-                stopwatch.Stop();
-            }
-
-            if (!mutationSucceeded)
-                return new RecoveryActionResult(false, false, "The mode pipeline did not complete.");
-
-            var completed = new CompletedRecoveryOperation("mode-undo", new SwitchHistoryEntry
-            {
-                Id = Guid.NewGuid(),
-                Timestamp = DateTimeOffset.Now,
-                OperationKind = "mode-undo",
-                RelatedOperationId = original.Id,
-                IsUndo = true,
-                PreviousMode = original.TargetMode,
-                TargetMode = original.PreviousMode,
-                Trigger = "recovery-center",
-                Reason = reason,
-                Succeeded = true,
-                DurationMilliseconds = stopwatch.ElapsedMilliseconds
             });
             _completedOperations[completed.Entry.Id] = completed;
             return await RecordCompletedOperationAsync(completed);

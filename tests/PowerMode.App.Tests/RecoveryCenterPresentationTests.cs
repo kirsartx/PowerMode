@@ -25,7 +25,14 @@ public sealed class RecoveryCenterPresentationTests
             document.Descendants(),
             element => element.Name.LocalName == "InfoBar");
         Assert.Equal("False", (string?)infoBar.Attribute("IsClosable"));
-        foreach (var buttonName in new[] { "UndoButton", "RestoreButton", "ResetButton" })
+        foreach (var buttonName in new[]
+                 {
+                     "UndoButton",
+                     "VerifyLastOperationButton",
+                     "RestoreBeforeStateButton",
+                     "RestoreButton",
+                     "ResetButton"
+                 })
         {
             var button = Assert.Single(
                 document.Descendants(),
@@ -53,12 +60,19 @@ public sealed class RecoveryCenterPresentationTests
     [Fact]
     public void MainWindow_RecoveryOrchestrationSuppressesRegularHistoryAndUsesSafetyBackup()
     {
-        var source = File.ReadAllText(FindRepositoryFile(
+        var advanced = File.ReadAllText(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
+        var main = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs"));
+        var source = advanced + main;
 
-        Assert.Contains("RecordHistory: false", source);
+        Assert.Contains("GetLastOperationAvailabilityAsync", source);
+        Assert.Contains("VerifyLastOperationAsync", source);
+        Assert.Contains("RestoreBeforeStateAsync", source);
         Assert.Contains("createSafetyBackup: true", source);
         Assert.Contains("ProductionRecoveryBackend", source);
+        Assert.DoesNotContain("FindLatestUndoable", source);
+        Assert.DoesNotContain("UndoLatestAsync", source);
     }
 
     [Fact]
@@ -90,6 +104,8 @@ public sealed class RecoveryCenterPresentationTests
         foreach (var handler in new[]
                  {
                      "UndoButton_Click",
+                     "VerifyLastOperationButton_Click",
+                     "RestoreBeforeStateButton_Click",
                      "RestoreButton_Click",
                      "ResetButton_Click"
                  })
@@ -111,11 +127,76 @@ public sealed class RecoveryCenterPresentationTests
 
         Assert.Contains("CancellationTokenSource.CreateLinkedTokenSource", source);
         Assert.Contains("RecoveryCenterWindow_Closed", source);
-        Assert.Contains("_latestUndo = null;", source);
+        Assert.Contains("_lastOperationAvailability = null;", source);
         Assert.Contains("_latestBackup = null;", source);
-        Assert.Contains("var latestUndo", source);
+        Assert.Contains("var lastOperationAvailability", source);
         Assert.Contains("var backupAvailability", source);
         Assert.Contains("TryUpdatePresentation", source);
+    }
+
+    [Fact]
+    public void RecoveryCenter_PresentsJournalSourceReasonTargetAndExactActions()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "RecoveryCenterWindow.xaml.cs"));
+
+        Assert.Contains("record.Source", source);
+        Assert.Contains("record.Reason", source);
+        Assert.Contains("record.Target.Key", source);
+        Assert.Contains("availability?.CanUndo", source);
+        Assert.Contains("availability?.RequiresVerification", source);
+        Assert.Contains("_owner.VerifyLastOperationAsync(operationId", source);
+        Assert.Contains("_owner.RestoreBeforeStateAsync(operationId", source);
+    }
+
+    [Fact]
+    public void MainWindow_UsesOneTypedRuntimeAndNoLegacyPowerMutationPaths()
+    {
+        var main = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs"));
+        var advanced = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
+        var features = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.Features.cs"));
+        var combined = main + advanced + features;
+
+        Assert.Equal(1, CountOccurrences(combined, "new ProcessRunner()"));
+        Assert.Equal(1, CountOccurrences(combined, "new PowerModeBackend("));
+        Assert.Equal(1, CountOccurrences(combined, "new LastOperationStore("));
+        Assert.Equal(1, CountOccurrences(combined, "new ModeSwitchCoordinator("));
+        Assert.Equal(1, CountOccurrences(combined, "new StartupCoordinator("));
+        Assert.Contains("ReadStateAsync", combined);
+        Assert.Contains("TrySwitchAsync", combined);
+        Assert.Contains("PowerModeTarget.ForCustom(", combined);
+        Assert.Contains("CustomPowerProfileSnapshot.FromSettings(profile)", combined);
+        Assert.DoesNotContain("PrepareCachedScript", combined);
+        Assert.DoesNotContain("_scriptPath", combined);
+        Assert.DoesNotContain("GetActivePlanGuidFast", combined);
+        Assert.DoesNotContain("ActivatePlanImmediatelyAsync", combined);
+        Assert.DoesNotContain("ApplyOptimisticMode", combined);
+        Assert.DoesNotContain("RunPowerCfgAsync", combined);
+        Assert.DoesNotContain("Process.Start(new ProcessStartInfo(\"powercfg.exe\"", combined);
+        Assert.DoesNotContain("Regex.Matches(result.Output", combined);
+        Assert.DoesNotContain("ApplyStatus(result.Output)", combined);
+    }
+
+    [Fact]
+    public void MainWindow_RendersOutcomeActionAndProfessionalDiagnostics()
+    {
+        var document = XDocument.Load(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml"));
+
+        foreach (var name in new[]
+                 {
+                     "StatusActionButton",
+                     "ModeSwitchDiagnosticText",
+                     "CopyModeSwitchDiagnosticButton"
+                 })
+        {
+            Assert.Single(
+                document.Descendants(),
+                element => (string?)element.Attribute(Xaml + "Name") == name);
+        }
     }
 
     [Fact]

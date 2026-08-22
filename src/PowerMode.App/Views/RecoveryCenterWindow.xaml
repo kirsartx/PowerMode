@@ -44,20 +44,30 @@
                                        Text="撤销最近模式切换"
                                        Style="{ThemeResource SubtitleTextBlockStyle}"/>
                             <TextBlock x:Name="UndoImpactText"
-                                       Text="恢复到该操作之前的标准电源模式。"
+                                       Text="从 last-operation.json 验证或恢复到该操作之前的电源状态。"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"/>
                             <TextBlock x:Name="UndoAvailabilityText"
-                                       Text="正在检查模式历史…"
+                                       Text="正在检查上次操作日志…"
                                        TextWrapping="Wrap"/>
                         </StackPanel>
-                        <Button x:Name="UndoButton"
-                                Grid.Column="2"
-                                Content="撤销"
-                                MinWidth="118"
-                                IsEnabled="False"
-                                VerticalAlignment="Center"
-                                Click="UndoButton_Click"/>
+                        <StackPanel Grid.Column="2" Spacing="8" VerticalAlignment="Center">
+                            <Button x:Name="UndoButton"
+                                    Content="撤销"
+                                    MinWidth="118"
+                                    IsEnabled="False"
+                                    Click="UndoButton_Click"/>
+                            <Button x:Name="VerifyLastOperationButton"
+                                    Content="验证当前状态"
+                                    MinWidth="118"
+                                    IsEnabled="False"
+                                    Click="VerifyLastOperationButton_Click"/>
+                            <Button x:Name="RestoreBeforeStateButton"
+                                    Content="恢复操作前状态"
+                                    MinWidth="118"
+                                    IsEnabled="False"
+                                    Click="RestoreBeforeStateButton_Click"/>
+                        </StackPanel>
                     </Grid>
                 </Border>
 

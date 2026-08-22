@@ -6,6 +6,152 @@ namespace PowerModeWinUI.Tests;
 public sealed class RecoveryServiceTests
 {
     [Fact]
+    public async Task GetLastOperationAvailabilityAsync_VerifiedJournalIsUndoableWithoutHistory()
+    {
+        var journal = new RecoveryJournal { Current = JournalRecord(LastOperationStatus.Verified) };
+        var coordinator = new RecoveryCoordinator();
+        var service = new RecoveryService(
+            journal,
+            coordinator,
+            new InMemoryRecoveryHistory([]),
+            new FakeRecoveryBackend());
+
+        var result = await service.GetLastOperationAvailabilityAsync();
+
+        Assert.Same(journal.Current, result.Record);
+        Assert.True(result.CanUndo);
+        Assert.False(result.RequiresVerification);
+        Assert.Null(result.Error);
+    }
+
+    [Theory]
+    [InlineData((int)LastOperationStatus.Prepared)]
+    [InlineData((int)LastOperationStatus.Applying)]
+    [InlineData((int)LastOperationStatus.Uncertain)]
+    public async Task GetLastOperationAvailabilityAsync_UnfinishedJournalOffersVerifyAndRestore(
+        int statusValue)
+    {
+        var journal = new RecoveryJournal
+        {
+            Current = JournalRecord((LastOperationStatus)statusValue)
+        };
+        var service = new RecoveryService(
+            journal,
+            new RecoveryCoordinator(),
+            new InMemoryRecoveryHistory([]),
+            new FakeRecoveryBackend());
+
+        var result = await service.GetLastOperationAvailabilityAsync();
+
+        Assert.False(result.CanUndo);
+        Assert.True(result.RequiresVerification);
+        Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public async Task VerifyLastOperationAsync_DelegatesExactJournalOperationToSharedCoordinator()
+    {
+        var record = JournalRecord(LastOperationStatus.Applying);
+        var coordinator = new RecoveryCoordinator();
+        var service = new RecoveryService(
+            new RecoveryJournal { Current = record },
+            coordinator,
+            new InMemoryRecoveryHistory([]),
+            new FakeRecoveryBackend());
+
+        var result = await service.VerifyLastOperationAsync(record.OperationId);
+
+        Assert.Equal(record.OperationId, coordinator.VerifiedOperationId);
+        Assert.Equal(record.OperationId, result.OperationId);
+    }
+
+    [Fact]
+    public async Task RestoreBeforeStateAsync_DelegatesExactJournalOperationToSharedCoordinator()
+    {
+        var record = JournalRecord(LastOperationStatus.Verified);
+        var coordinator = new RecoveryCoordinator();
+        var service = new RecoveryService(
+            new RecoveryJournal { Current = record },
+            coordinator,
+            new InMemoryRecoveryHistory([]),
+            new FakeRecoveryBackend());
+
+        var result = await service.RestoreBeforeStateAsync(record.OperationId);
+
+        Assert.Equal(record.OperationId, coordinator.RestoredOperationId);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task GetLastOperationAvailabilityAsync_JournalReadFailureIsPersistentRecoveryError()
+    {
+        var service = new RecoveryService(
+            new RecoveryJournal { Error = "journal unreadable" },
+            new RecoveryCoordinator(),
+            new InMemoryRecoveryHistory([]),
+            new FakeRecoveryBackend());
+
+        var result = await service.GetLastOperationAvailabilityAsync();
+
+        Assert.Null(result.Record);
+        Assert.False(result.CanUndo);
+        Assert.False(result.RequiresVerification);
+        Assert.Contains("journal unreadable", result.Error);
+    }
+
+    [Fact]
+    public async Task RestoreBeforeStateAsync_UsesJournalBeforeStateAndMarksRolledBack()
+    {
+        var journal = new RecoveryJournal
+        {
+            Current = JournalRecord(LastOperationStatus.Uncertain)
+        };
+        var backend = new RestoreBackend(journal.Current.BeforeState);
+        var history = new InMemoryRecoveryHistory([]);
+        var coordinator = new ModeSwitchCoordinator(
+            backend,
+            journal,
+            history,
+            TimeProvider.System);
+        var service = new RecoveryService(
+            journal,
+            coordinator,
+            history,
+            new FakeRecoveryBackend());
+
+        var result = await service.RestoreBeforeStateAsync(journal.Current.OperationId);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(journal.Current.BeforeState, backend.RestoredSnapshot);
+        Assert.Equal(LastOperationStatus.RolledBack, journal.Current.Status);
+    }
+
+    [Fact]
+    public async Task RestoreBeforeStateAsync_UnconfirmedReadbackMarksUncertain()
+    {
+        var record = JournalRecord(LastOperationStatus.Applying);
+        var journal = new RecoveryJournal { Current = record };
+        var mismatched = record.BeforeState with { CpuMaximumAcPercent = 37 };
+        var backend = new RestoreBackend(mismatched);
+        var history = new InMemoryRecoveryHistory([]);
+        var coordinator = new ModeSwitchCoordinator(
+            backend,
+            journal,
+            history,
+            TimeProvider.System);
+        var service = new RecoveryService(
+            journal,
+            coordinator,
+            history,
+            new FakeRecoveryBackend());
+
+        var result = await service.RestoreBeforeStateAsync(record.OperationId);
+
+        Assert.False(result.MutationSucceeded);
+        Assert.Equal(LastOperationStatus.Uncertain, journal.Current!.Status);
+    }
+
+    [Fact]
     public async Task HistoryStore_OldJsonWithoutRecoveryMetadata_DefaultsToModeSwitch()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"powermode-recovery-{Guid.NewGuid():N}");
@@ -48,146 +194,6 @@ public sealed class RecoveryServiceTests
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_SkipsFailedCustomAndAlreadyUndoneOperations()
-    {
-        var eligible = ModeSwitch("balanced", "high");
-        var alreadyUndone = ModeSwitch("remote", "saver");
-        var undo = new SwitchHistoryEntry
-        {
-            Succeeded = true,
-            OperationKind = "mode-undo",
-            IsUndo = true,
-            RelatedOperationId = alreadyUndone.Id
-        };
-        var custom = ModeSwitch("high", "profile:Quiet");
-        var failed = ModeSwitch("high", "remote");
-        failed.Succeeded = false;
-        var history = new InMemoryRecoveryHistory([failed, custom, undo, alreadyUndone, eligible]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Equal(eligible.Id, result?.Id);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_DoesNotTreatFailedUndoAsCompleted()
-    {
-        var original = ModeSwitch("balanced", "high");
-        var failedUndo = new SwitchHistoryEntry
-        {
-            Succeeded = false,
-            OperationKind = "mode-undo",
-            IsUndo = true,
-            RelatedOperationId = original.Id
-        };
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([failedUndo, original]),
-            new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Equal(original.Id, result?.Id);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_RequiresConsistentUndoMetadata()
-    {
-        var original = ModeSwitch("balanced", "high");
-        var unrelatedMutation = new SwitchHistoryEntry
-        {
-            Succeeded = true,
-            OperationKind = "configuration-reset",
-            IsUndo = true,
-            RelatedOperationId = original.Id
-        };
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([unrelatedMutation, original]),
-            new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Equal(original.Id, result?.Id);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_ReturnsNullWhenNoEligibleOperationExists()
-    {
-        var custom = ModeSwitch("balanced", "profile:Quiet");
-        var failed = ModeSwitch("balanced", "high");
-        failed.Succeeded = false;
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([custom, failed]),
-            new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_SkipsUnknownAndCustomPreviousModes()
-    {
-        var unknownPrevious = ModeSwitch("unknown", "high");
-        unknownPrevious.Timestamp = new DateTimeOffset(2026, 1, 3, 0, 0, 0, TimeSpan.Zero);
-        var customPrevious = ModeSwitch("profile:Quiet", "balanced");
-        customPrevious.Timestamp = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
-        var eligible = ModeSwitch("remote", "saver");
-        eligible.Timestamp = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([unknownPrevious, customPrevious, eligible]),
-            new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Equal(eligible.Id, result?.Id);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_SelectsNewestTimestampFromOldestFirstHistory()
-    {
-        var oldest = ModeSwitch("balanced", "high");
-        oldest.Timestamp = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var newest = ModeSwitch("high", "remote");
-        newest.Timestamp = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([oldest, newest]),
-            new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Equal(newest.Id, result?.Id);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_PreservesHistoryOrderWhenTimestampsMatch()
-    {
-        var timestamp = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var first = ModeSwitch("balanced", "high");
-        first.Timestamp = timestamp;
-        var second = ModeSwitch("high", "remote");
-        second.Timestamp = timestamp;
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([first, second]),
-            new FakeRecoveryBackend());
-
-        var result = await service.FindLatestUndoableAsync();
-
-        Assert.Equal(first.Id, result?.Id);
-    }
-
-    [Fact]
-    public async Task FindLatestUndoableAsync_RequestsBoundedRecoveryHistoryWindow()
-    {
-        var history = new InMemoryRecoveryHistory([]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-
-        await service.FindLatestUndoableAsync();
-
-        Assert.Equal(RecoveryService.MaximumRecoveryHistoryEntries, history.LastMaximumCount);
     }
 
     [Fact]
@@ -602,87 +608,17 @@ public sealed class RecoveryServiceTests
     }
 
     [Fact]
-    public async Task UndoLatestAsync_ExecutesPreviousModeAndRecordsExactlyOneLinkedUndo()
-    {
-        var original = ModeSwitch("balanced", "high");
-        var history = new InMemoryRecoveryHistory([original]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-        var executedModes = new List<string>();
-
-        var result = await service.UndoLatestAsync(
-            (mode, _) =>
-            {
-                executedModes.Add(mode);
-                return Task.FromResult(true);
-            },
-            "Undo latest mode switch");
-
-        Assert.True(result.MutationSucceeded);
-        Assert.True(result.AuditSucceeded);
-        Assert.Equal(["balanced"], executedModes);
-        var undo = Assert.Single(history.RecordedEntries);
-        Assert.Equal("mode-undo", undo.OperationKind);
-        Assert.True(undo.IsUndo);
-        Assert.True(undo.Succeeded);
-        Assert.Equal(original.Id, undo.RelatedOperationId);
-        Assert.Equal(original.TargetMode, undo.PreviousMode);
-        Assert.Equal(original.PreviousMode, undo.TargetMode);
-        Assert.Equal("recovery-center", undo.Trigger);
-    }
-
-    [Fact]
-    public async Task UndoLatestAsync_ConcurrentCallsExecuteMutationOnce()
-    {
-        var original = ModeSwitch("balanced", "high");
-        var history = new InMemoryRecoveryHistory([original]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-        var mutationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseMutation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var executionCount = 0;
-
-        Task<bool> ExecuteAsync(string mode, CancellationToken token)
-        {
-            Interlocked.Increment(ref executionCount);
-            mutationEntered.TrySetResult();
-            return WaitAndSucceedAsync(releaseMutation.Task, token);
-        }
-
-        var first = service.UndoLatestAsync(ExecuteAsync, "Undo latest mode switch");
-        await mutationEntered.Task;
-        var second = service.UndoLatestAsync(ExecuteAsync, "Undo latest mode switch");
-        Assert.False(second.IsCompleted);
-
-        releaseMutation.TrySetResult();
-        await Task.WhenAll(first, second);
-
-        Assert.Equal(1, executionCount);
-        Assert.Single(history.RecordedEntries, entry => entry.OperationKind == "mode-undo");
-    }
-
-    [Fact]
     public async Task WaitForIdleAsync_WaitsForRunningRecoveryMutation()
     {
-        var original = ModeSwitch("balanced", "high");
-        var service = new RecoveryService(
-            new InMemoryRecoveryHistory([original]),
-            new FakeRecoveryBackend());
-        var mutationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseMutation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var undo = service.UndoLatestAsync(
-            async (_, token) =>
-            {
-                mutationEntered.TrySetResult();
-                await releaseMutation.Task.WaitAsync(token);
-                return true;
-            },
-            "Undo latest mode switch");
-        await mutationEntered.Task;
+        var backend = new FakeRecoveryBackend(pauseBackup: true);
+        var service = new RecoveryService(new InMemoryRecoveryHistory([]), backend);
+        var reset = service.ResetDefaultsAsync(_ => Task.CompletedTask);
 
         var idle = service.WaitForIdleAsync();
 
         Assert.False(idle.IsCompleted);
-        releaseMutation.TrySetResult();
-        await undo;
+        backend.CompleteBackup();
+        await reset;
         await idle;
     }
 
@@ -703,123 +639,6 @@ public sealed class RecoveryServiceTests
 
         Assert.Null(result.Backup);
         Assert.Contains("settings locked", result.Error);
-    }
-
-    [Fact]
-    public async Task UndoLatestAsync_ExecuteReturnsFalse_DoesNotRecordUndo()
-    {
-        var history = new InMemoryRecoveryHistory([ModeSwitch("balanced", "high")]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-
-        var result = await service.UndoLatestAsync(
-            (_, _) => Task.FromResult(false),
-            "Undo latest mode switch");
-
-        Assert.False(result.MutationSucceeded);
-        Assert.False(result.AuditSucceeded);
-        Assert.Empty(history.RecordedEntries);
-    }
-
-    [Fact]
-    public async Task UndoLatestAsync_ExecuteThrows_DoesNotRecordUndo()
-    {
-        var history = new InMemoryRecoveryHistory([ModeSwitch("balanced", "high")]);
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-
-        var result = await service.UndoLatestAsync(
-            (_, _) => Task.FromException<bool>(new InvalidOperationException("mode failed")),
-            "Undo latest mode switch");
-
-        Assert.False(result.MutationSucceeded);
-        Assert.False(result.AuditSucceeded);
-        Assert.Contains("mode failed", result.Error);
-        Assert.Empty(history.RecordedEntries);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task UndoLatestAsync_AuditAppendFailure_RetryDoesNotRepeatMutation(
-        bool failAfterWrite)
-    {
-        var directory = Path.Combine(Path.GetTempPath(), $"powermode-recovery-{Guid.NewGuid():N}");
-        var path = Path.Combine(directory, "switch-history.jsonl");
-        Directory.CreateDirectory(directory);
-        var original = ModeSwitch("balanced", "high");
-        await new HistoryStore(path).RecordAsync(original);
-        var appendAttempts = 0;
-        var history = new HistoryStore(
-            path,
-            async (destination, contents, token) =>
-            {
-                appendAttempts++;
-                if (failAfterWrite)
-                    await File.AppendAllTextAsync(destination, contents, token);
-                if (appendAttempts == 1)
-                    throw new IOException(failAfterWrite ? "after write" : "before write");
-                if (!failAfterWrite)
-                    await File.AppendAllTextAsync(destination, contents, token);
-            });
-        var service = new RecoveryService(history, new FakeRecoveryBackend());
-        var executionCount = 0;
-
-        try
-        {
-            var first = await service.UndoLatestAsync(
-                (_, _) =>
-                {
-                    executionCount++;
-                    return Task.FromResult(true);
-                },
-                "Undo latest mode switch");
-            var second = await service.UndoLatestAsync(
-                (_, _) =>
-                {
-                    executionCount++;
-                    return Task.FromResult(true);
-                },
-                "Undo latest mode switch");
-
-            Assert.True(first.MutationSucceeded);
-            Assert.False(first.AuditSucceeded);
-            Assert.True(second.MutationSucceeded);
-            Assert.True(second.AuditSucceeded);
-            Assert.Equal(1, executionCount);
-            Assert.Single(
-                await history.GetRecentAsync(),
-                entry => entry.OperationKind == "mode-undo");
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task UndoLatestAsync_InvokesModePipelineOnCallerSynchronizationContext()
-    {
-        var callerContext = new InlineSynchronizationContext();
-        var originalContext = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(callerContext);
-        try
-        {
-            var original = ModeSwitch("balanced", "high");
-            var service = new RecoveryService(
-                new AsynchronousRecoveryHistory([original]),
-                new FakeRecoveryBackend());
-
-            await service.UndoLatestAsync(
-                (_, _) =>
-                {
-                    Assert.Same(callerContext, SynchronizationContext.Current);
-                    return Task.FromResult(true);
-                },
-                "Undo latest mode switch");
-        }
-        finally
-        {
-            SynchronizationContext.SetSynchronizationContext(originalContext);
-        }
     }
 
     [Theory]
@@ -857,11 +676,37 @@ public sealed class RecoveryServiceTests
             OperationKind = "mode-switch"
         };
 
-    private static async Task<bool> WaitAndSucceedAsync(Task release, CancellationToken token)
-    {
-        await release.WaitAsync(token);
-        return true;
-    }
+    private static LastOperationRecord JournalRecord(LastOperationStatus status) => new(
+        1,
+        Guid.Parse("11111111-1111-1111-1111-111111111111"),
+        "manual",
+        "User selected High performance",
+        PowerModeTarget.ForPreset(PowerModePreset.High),
+        null,
+        false,
+        DateTimeOffset.Parse("2026-08-22T12:00:00Z"),
+        new PowerModeState(
+            Guid.Parse("381b4222-f694-41f0-9685-ff5bb260df2e"),
+            "Balanced",
+            PowerModePreset.Balanced,
+            PowerSourceKind.Ac,
+            null,
+            100,
+            100,
+            5,
+            5,
+            2,
+            2,
+            100,
+            100,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            false),
+        status);
 
     private sealed class InMemoryRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
         : IRecoveryHistory
@@ -891,23 +736,6 @@ public sealed class RecoveryServiceTests
         }
     }
 
-    private sealed class AsynchronousRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
-        : IRecoveryHistory
-    {
-        public async Task<IReadOnlyList<SwitchHistoryEntry>> GetRecentAsync(
-            int maximumCount,
-            CancellationToken cancellationToken = default)
-        {
-            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
-            return [.. entries.Take(maximumCount)];
-        }
-
-        public Task RecordAsync(
-            SwitchHistoryEntry entry,
-            CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
-    }
-
     private sealed class FailOnceRecoveryHistory(IReadOnlyList<SwitchHistoryEntry> entries)
         : IRecoveryHistory
     {
@@ -934,23 +762,6 @@ public sealed class RecoveryServiceTests
             if (RecordedEntries.All(existing => existing.Id != entry.Id))
                 RecordedEntries.Add(entry);
             return Task.CompletedTask;
-        }
-    }
-
-    private sealed class InlineSynchronizationContext : SynchronizationContext
-    {
-        public override void Post(SendOrPostCallback callback, object? state)
-        {
-            var previous = Current;
-            SetSynchronizationContext(this);
-            try
-            {
-                callback(state);
-            }
-            finally
-            {
-                SetSynchronizationContext(previous);
-            }
         }
     }
 
@@ -998,5 +809,101 @@ public sealed class RecoveryServiceTests
         }
 
         public void CompleteBackup() => _backupCompletion.TrySetResult(SafetyBackup);
+    }
+
+    private sealed class RecoveryJournal : ILastOperationStore
+    {
+        public LastOperationRecord? Current { get; set; }
+        public string? Error { get; set; }
+
+        public Task<LastOperationReadResult> ReadAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new LastOperationReadResult(Current, Error));
+
+        public Task<LastOperationWriteResult> WriteAsync(
+            LastOperationRecord record,
+            Guid? expectedOperationId = null,
+            CancellationToken cancellationToken = default)
+        {
+            Current = record;
+            return Task.FromResult(new LastOperationWriteResult(true, false, null));
+        }
+    }
+
+    private sealed class RecoveryCoordinator : IModeSwitchCoordinator
+    {
+        public Guid? VerifiedOperationId { get; private set; }
+        public Guid? RestoredOperationId { get; private set; }
+
+        public Task<ModeSwitchResult?> TrySwitchAsync(
+            ModeSwitchRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<LastOperationVerificationResult> VerifyLastOperationAsync(
+            Guid operationId,
+            CancellationToken cancellationToken = default)
+        {
+            VerifiedOperationId = operationId;
+            return Task.FromResult(new LastOperationVerificationResult(
+                operationId,
+                true,
+                JournalRecord(LastOperationStatus.Verified).BeforeState,
+                [],
+                null));
+        }
+
+        public Task<RecoveryActionResult> RestoreBeforeStateAsync(
+            Guid operationId,
+            CancellationToken cancellationToken = default)
+        {
+            RestoredOperationId = operationId;
+            return Task.FromResult(new RecoveryActionResult(true, true));
+        }
+    }
+
+    private sealed class RestoreBackend(PowerModeState readback) : IPowerModeBackend
+    {
+        public PowerModeState? RestoredSnapshot { get; private set; }
+
+        public Task<PowerModeStateResult> ReadStateAsync(
+            Guid operationId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new PowerModeStateResult(
+                readback,
+                Operation(operationId, "status", readback)));
+
+        public Task<BackendOperationResult> ApplyAsync(
+            Guid operationId,
+            PowerModeTarget target,
+            int? cpuMaximumPercent = null,
+            bool disableWifi = false,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<BackendOperationResult> RestoreAsync(
+            Guid operationId,
+            PowerModeState snapshot,
+            CancellationToken cancellationToken = default)
+        {
+            RestoredSnapshot = snapshot;
+            return Task.FromResult(Operation(operationId, "restore", snapshot));
+        }
+
+        private static BackendOperationResult Operation(
+            Guid operationId,
+            string action,
+            PowerModeState state) => new(
+            operationId,
+            action,
+            null,
+            DateTimeOffset.UtcNow,
+            TimeSpan.Zero,
+            BackendOperationOutcome.Succeeded,
+            null,
+            state,
+            [],
+            [],
+            null);
     }
 }

@@ -8,7 +8,7 @@ public sealed partial class RecoveryCenterWindow : Window
 {
     private readonly MainWindow _owner;
     private readonly bool _isChinese;
-    private SwitchHistoryEntry? _latestUndo;
+    private LastOperationAvailability? _lastOperationAvailability;
     private ConfigurationBackupInfo? _latestBackup;
     private readonly CancellationTokenSource _lifetimeCancellation;
     private bool _busy;
@@ -36,10 +36,12 @@ public sealed partial class RecoveryCenterWindow : Window
         {
             HeaderText.Text = "Recovery center";
             SubheaderText.Text = "Undo the latest mode operation or safely restore PowerMode configuration";
-            UndoTitle.Text = "Undo latest mode switch";
-            UndoImpactText.Text = "Return to the standard power mode used before that operation.";
-            UndoAvailabilityText.Text = "Checking mode history…";
+            UndoTitle.Text = "Recover the last power operation";
+            UndoImpactText.Text = "Verify last-operation.json or restore the exact power state captured before that operation.";
+            UndoAvailabilityText.Text = "Checking the last-operation journal…";
             UndoButton.Content = "Undo";
+            VerifyLastOperationButton.Content = "Verify current state";
+            RestoreBeforeStateButton.Content = "Restore previous state";
             RestoreTitle.Text = "Restore configuration backup";
             RestoreImpactText.Text =
                 "Back up current settings, then atomically restore the latest distinct configuration. The active Windows power plan is not changed.";
@@ -57,6 +59,12 @@ public sealed partial class RecoveryCenterWindow : Window
         AutomationProperties.SetName(
             UndoButton,
             RecoveryCenterAutomationLabels.Undo(_isChinese));
+        AutomationProperties.SetName(
+            VerifyLastOperationButton,
+            _isChinese ? "验证上次电源操作" : "Verify last power operation");
+        AutomationProperties.SetName(
+            RestoreBeforeStateButton,
+            _isChinese ? "恢复操作前电源状态" : "Restore power state before operation");
         AutomationProperties.SetName(
             RestoreButton,
             RecoveryCenterAutomationLabels.Restore(_isChinese));
@@ -83,7 +91,7 @@ public sealed partial class RecoveryCenterWindow : Window
     {
         if (!TryUpdatePresentation(() =>
             {
-                _latestUndo = null;
+                _lastOperationAvailability = null;
                 _latestBackup = null;
                 SetBusy(
                     true,
@@ -94,11 +102,11 @@ public sealed partial class RecoveryCenterWindow : Window
             }))
             return;
 
-        var latestUndo = default(SwitchHistoryEntry);
+        var lastOperationAvailability = default(LastOperationAvailability);
         var backupAvailability = default(RecoveryBackupAvailability);
         try
         {
-            latestUndo = await _owner.FindLatestUndoableModeOperationAsync(
+            lastOperationAvailability = await _owner.GetLastOperationAvailabilityAsync(
                 _lifetimeCancellation.Token);
             _lifetimeCancellation.Token.ThrowIfCancellationRequested();
             backupAvailability = _owner.GetLatestDistinctSettingsBackup();
@@ -106,7 +114,7 @@ public sealed partial class RecoveryCenterWindow : Window
                 throw new IOException(backupAvailability.Error);
             TryUpdatePresentation(() =>
             {
-                _latestUndo = latestUndo;
+                _lastOperationAvailability = lastOperationAvailability;
                 _latestBackup = backupAvailability.Backup;
                 RenderAvailability();
             });
@@ -131,13 +139,29 @@ public sealed partial class RecoveryCenterWindow : Window
 
     private void RenderAvailability()
     {
-        UndoAvailabilityText.Text = _latestUndo is null
-            ? (_isChinese
-                ? "没有可撤销的成功标准模式切换，或最近操作已经撤销。"
-                : "No eligible successful standard-mode switch is available, or it was already undone.")
-            : (_isChinese
-                ? $"{_latestUndo.Timestamp.ToLocalTime():yyyy-MM-dd HH:mm} · {_latestUndo.TargetMode} → {_latestUndo.PreviousMode}"
-                : $"{_latestUndo.Timestamp.ToLocalTime():yyyy-MM-dd HH:mm} · {_latestUndo.TargetMode} → {_latestUndo.PreviousMode}");
+        var availability = _lastOperationAvailability;
+        var record = availability?.Record;
+        if (!string.IsNullOrWhiteSpace(availability?.Error))
+        {
+            UndoAvailabilityText.Text = availability.Error;
+        }
+        else if (record is null)
+        {
+            UndoAvailabilityText.Text = _isChinese
+                ? "没有可用的上次操作日志。"
+                : "No last-operation journal record is available.";
+        }
+        else
+        {
+            var reason = string.IsNullOrWhiteSpace(record.Reason)
+                ? (_isChinese ? "未提供原因" : "No reason provided")
+                : record.Reason;
+            UndoAvailabilityText.Text =
+                $"{record.StartedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Target.Key}\n" +
+                $"{(_isChinese ? "来源" : "Source")}: {record.Source} · " +
+                $"{(_isChinese ? "原因" : "Reason")}: {reason}\n" +
+                $"{(_isChinese ? "状态" : "Status")}: {record.Status}";
+        }
         RestoreAvailabilityText.Text = _latestBackup is null
             ? (_isChinese
                 ? "没有与当前设置不同的配置备份。"
@@ -145,15 +169,26 @@ public sealed partial class RecoveryCenterWindow : Window
             : (_isChinese
                 ? $"{_latestBackup.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm} · {_latestBackup.FileName}"
                 : $"{_latestBackup.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm} · {_latestBackup.FileName}");
-        UndoButton.IsEnabled = !_busy && _latestUndo is not null;
+        UndoButton.Visibility = availability?.CanUndo == true
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        VerifyLastOperationButton.Visibility = availability?.RequiresVerification == true
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        RestoreBeforeStateButton.Visibility = availability?.RequiresVerification == true
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        UndoButton.IsEnabled = !_busy && availability?.CanUndo == true;
+        VerifyLastOperationButton.IsEnabled = !_busy && availability?.RequiresVerification == true;
+        RestoreBeforeStateButton.IsEnabled = !_busy && availability?.RequiresVerification == true;
         RestoreButton.IsEnabled = !_busy && _latestBackup is not null;
         ResetButton.IsEnabled = !_busy;
     }
 
     private async void UndoButton_Click(object sender, RoutedEventArgs e)
     {
-        var undo = _latestUndo;
-        if (undo is null || !TryBeginOperation(
+        var operationId = _lastOperationAvailability?.Record?.OperationId;
+        if (!operationId.HasValue || !TryBeginOperation(
                 _isChinese ? "等待确认撤销操作…" : "Waiting for undo confirmation…"))
             return;
 
@@ -163,8 +198,8 @@ public sealed partial class RecoveryCenterWindow : Window
             var confirmed = await ConfirmAsync(
                 _isChinese ? "撤销最近模式切换？" : "Undo latest mode switch?",
                 _isChinese
-                    ? $"PowerMode 将通过现有模式管线恢复到 {undo.PreviousMode}。"
-                    : $"PowerMode will use the existing mode pipeline to return to {undo.PreviousMode}.",
+                    ? "PowerMode 将恢复日志中保存的完整操作前状态并重新读取验证。"
+                    : "PowerMode will restore the complete before-state from the journal and verify it with a fresh read.",
                 _isChinese ? "撤销" : "Undo");
             if (!confirmed)
                 return;
@@ -172,15 +207,15 @@ public sealed partial class RecoveryCenterWindow : Window
             TryUpdatePresentation(() => SetBusy(
                 true,
                 _isChinese ? "正在撤销模式切换…" : "Undoing mode switch…"));
-            var result = await _owner.UndoLatestModeOperationAsync(
+            var result = await _owner.RestoreBeforeStateAsync(operationId.Value,
                 _lifetimeCancellation.Token);
             refreshAvailability = true;
             TryUpdatePresentation(() => ShowActionResult(
                 result,
                 _isChinese ? "最近模式切换已撤销。" : "The latest mode switch was undone.",
                 _isChinese
-                    ? "模式已恢复，但操作记录失败。"
-                    : "The mode was restored, but its audit record failed.",
+                    ? "电源状态已恢复，但日志终态写入失败。"
+                    : "The power state was restored, but the terminal journal write failed.",
                 _isChinese
                     ? "未能撤销最近模式切换"
                     : "The latest mode switch could not be undone"));
@@ -194,6 +229,108 @@ public sealed partial class RecoveryCenterWindow : Window
                 ShowResult(
                     FormatFailure(_isChinese ? "撤销失败" : "Undo failed", ex),
                     InfoBarSeverity.Error));
+        }
+        finally
+        {
+            if (refreshAvailability && !_closed)
+                await RefreshAvailabilityAsync(showProgress: false);
+            else
+                TryUpdatePresentation(() => SetBusy(false));
+        }
+    }
+
+    private async void VerifyLastOperationButton_Click(object sender, RoutedEventArgs e)
+    {
+        var operationId = _lastOperationAvailability?.Record?.OperationId;
+        if (!operationId.HasValue || !TryBeginOperation(
+                _isChinese ? "等待确认验证操作…" : "Waiting for verification confirmation…"))
+            return;
+
+        var refreshAvailability = false;
+        try
+        {
+            var confirmed = await ConfirmAsync(
+                _isChinese ? "验证上次电源操作？" : "Verify the last power operation?",
+                _isChinese
+                    ? "将重新读取当前电源状态，并与日志中的目标预期逐项比较。"
+                    : "PowerMode will freshly read the current power state and compare it with the journaled target expectations.",
+                _isChinese ? "验证" : "Verify");
+            if (!confirmed)
+                return;
+            _lifetimeCancellation.Token.ThrowIfCancellationRequested();
+            TryUpdatePresentation(() => SetBusy(
+                true,
+                _isChinese ? "正在验证上次操作…" : "Verifying the last operation…"));
+            var result = await _owner.VerifyLastOperationAsync(operationId.Value,
+                _lifetimeCancellation.Token);
+            refreshAvailability = true;
+            TryUpdatePresentation(() => ShowResult(
+                result.Error ?? (result.MatchesCriticalExpectations
+                    ? (_isChinese ? "上次操作已验证。" : "The last operation is verified.")
+                    : (_isChinese ? "关键设置与目标不匹配。" : "Critical settings do not match the target.")),
+                result.MatchesCriticalExpectations
+                    ? InfoBarSeverity.Success
+                    : InfoBarSeverity.Warning));
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            TryUpdatePresentation(() => ShowResult(
+                FormatFailure(_isChinese ? "验证失败" : "Verification failed", ex),
+                InfoBarSeverity.Error));
+        }
+        finally
+        {
+            if (refreshAvailability && !_closed)
+                await RefreshAvailabilityAsync(showProgress: false);
+            else
+                TryUpdatePresentation(() => SetBusy(false));
+        }
+    }
+
+    private async void RestoreBeforeStateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var operationId = _lastOperationAvailability?.Record?.OperationId;
+        if (!operationId.HasValue || !TryBeginOperation(
+                _isChinese ? "等待确认状态恢复…" : "Waiting for state-restore confirmation…"))
+            return;
+
+        var refreshAvailability = false;
+        try
+        {
+            var confirmed = await ConfirmAsync(
+                _isChinese ? "恢复操作前状态？" : "Restore the before-state?",
+                _isChinese
+                    ? "将恢复日志保存的完整操作前状态，并通过新的 JSON 状态读取进行确认。"
+                    : "PowerMode will restore the complete journaled before-state and confirm it with a fresh JSON state read.",
+                _isChinese ? "恢复操作前状态" : "Restore before-state");
+            if (!confirmed)
+                return;
+            _lifetimeCancellation.Token.ThrowIfCancellationRequested();
+            TryUpdatePresentation(() => SetBusy(
+                true,
+                _isChinese ? "正在恢复操作前状态…" : "Restoring the before-state…"));
+            var result = await _owner.RestoreBeforeStateAsync(operationId.Value,
+                _lifetimeCancellation.Token);
+            refreshAvailability = true;
+            TryUpdatePresentation(() => ShowActionResult(
+                result,
+                _isChinese ? "操作前状态已恢复并验证。" : "The before-state was restored and verified.",
+                _isChinese
+                    ? "状态已恢复，但日志终态写入失败。"
+                    : "The state was restored, but the terminal journal write failed.",
+                _isChinese ? "状态恢复失败" : "Before-state restore failed"));
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            TryUpdatePresentation(() => ShowResult(
+                FormatFailure(_isChinese ? "状态恢复失败" : "Before-state restore failed", ex),
+                InfoBarSeverity.Error));
         }
         finally
         {
@@ -374,7 +511,7 @@ public sealed partial class RecoveryCenterWindow : Window
     private void RecoveryCenterWindow_Closed(object sender, WindowEventArgs args)
     {
         _closed = true;
-        _latestUndo = null;
+        _lastOperationAvailability = null;
         _latestBackup = null;
 
         if (!_lifetimeCancellation.IsCancellationRequested)
@@ -392,6 +529,8 @@ public sealed partial class RecoveryCenterWindow : Window
         if (busy)
         {
             UndoButton.IsEnabled = false;
+            VerifyLastOperationButton.IsEnabled = false;
+            RestoreBeforeStateButton.IsEnabled = false;
             RestoreButton.IsEnabled = false;
             ResetButton.IsEnabled = false;
             if (updateMessage)

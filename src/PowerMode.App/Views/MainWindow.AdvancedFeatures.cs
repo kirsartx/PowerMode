@@ -12,14 +12,11 @@ public sealed partial class MainWindow
         "PowerMode",
         dataDirectory: SettingsStore.DirectoryPath);
     private readonly SemaphoreSlim _monitoringConfigurationGate = new(1, 1);
-    private readonly SemaphoreSlim _activationGate = new(1, 1);
-    private CancellationTokenSource? _modeSwitchCancellation;
     private PowerTelemetrySample? _lastTelemetry;
     private InsightsWindow? _insightsWindow;
     private RecoveryCenterWindow? _recoveryCenterWindow;
     private RecoveryService? _recoveryService;
     private readonly CancellationTokenSource _recoveryLifetimeCancellation = new();
-    private long _modeSwitchGeneration;
     private string? _pendingMode;
     private bool _modeSwitchInProgress;
     private bool _advancedFeaturesInitialized;
@@ -48,11 +45,6 @@ public sealed partial class MainWindow
             return;
 
         _advancedFeaturesInitialized = true;
-        _recoveryService = new RecoveryService(
-            HistoryStore.Default,
-            new ProductionRecoveryBackend(
-                _systemIntegration,
-                () => _featureSettings.ConfigurationBackupCount));
         _systemIntegration.NotificationSink = notification =>
         {
             if (!_featureSettings.NotificationsEnabled)
@@ -75,14 +67,31 @@ public sealed partial class MainWindow
     internal SystemIntegrationService SharedSystemIntegrationService => _systemIntegration;
     internal CancellationToken RecoveryLifetimeToken => _recoveryLifetimeCancellation.Token;
 
-    private async Task RunStartupFeaturesAsync()
+    private async Task RunStartupFeaturesAsync(
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!CanPersistSettings)
             return;
         if (!_featureSettings.CheckUpdatesOnStartup || string.IsNullOrWhiteSpace(_featureSettings.UpdateApiUrl))
             return;
 
-        await CheckForUpdatesAndNotifyAsync(_featureSettings.UpdateApiUrl, silentWhenCurrent: true);
+        await CheckForUpdatesAndNotifyAsync(
+            _featureSettings.UpdateApiUrl,
+            silentWhenCurrent: true);
+    }
+
+    private async Task ApplyLastModeOnStartupAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_featureSettings.ApplyLastModeOnStartup ||
+            string.IsNullOrWhiteSpace(_featureSettings.LastMode))
+            return;
+        await RunModeWithContextAsync(
+            _featureSettings.LastMode,
+            new SwitchRequestContext(
+                "startup",
+                AllowPreview: false));
     }
 
     internal void ApplySystemSettings(PowerModeSettings settings)
@@ -99,8 +108,6 @@ public sealed partial class MainWindow
             StatusText.Text = IsChinese ? "开机启动设置失败" : "Startup setting failed";
             StatusBar.Severity = InfoBarSeverity.Warning;
         }
-
-        _ = BackupSettingsIfChangedAsync(settings.ConfigurationBackupCount, "settings-save");
     }
 
     private async Task BackupSettingsIfChangedAsync(int retention, string reason)
@@ -167,22 +174,45 @@ public sealed partial class MainWindow
             cancellationToken);
     }
 
-    internal Task<SwitchHistoryEntry?> FindLatestUndoableModeOperationAsync(
+    internal Task<LastOperationAvailability> GetLastOperationAvailabilityAsync(
         CancellationToken cancellationToken) =>
-        GetRecoveryService().FindLatestUndoableAsync(cancellationToken);
+        GetRecoveryService().GetLastOperationAvailabilityAsync(cancellationToken);
 
-    internal Task<RecoveryActionResult> UndoLatestModeOperationAsync(
-        CancellationToken cancellationToken) =>
-        GetRecoveryService().UndoLatestAsync(
-            (mode, _) => RunModeWithContextAsync(
-                mode,
-                new SwitchRequestContext(
-                    "recovery-center",
-                    IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
-                    AllowPreview: false,
-                    RecordHistory: false)),
-            IsChinese ? "撤销最近模式切换" : "Undo latest mode switch",
+    internal async Task<LastOperationVerificationResult> VerifyLastOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        var result = await GetRecoveryService().VerifyLastOperationAsync(
+            operationId,
             cancellationToken);
+        if (result.MatchesCriticalExpectations)
+            await ResumeStartupAfterRecoveryAsync(cancellationToken);
+        return result;
+    }
+
+    internal async Task<RecoveryActionResult> RestoreBeforeStateAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        var result = await GetRecoveryService().RestoreBeforeStateAsync(
+            operationId,
+            cancellationToken);
+        if (result.Succeeded)
+            await ResumeStartupAfterRecoveryAsync(cancellationToken);
+        return result;
+    }
+
+    private async Task ResumeStartupAfterRecoveryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (!_startupActivationDeferred)
+            return;
+        await _startupCoordinator.ResumeAfterRecoveryAsync(cancellationToken);
+        _startupActivationDeferred = false;
+        _persistentModeSwitchPresentation = false;
+        StatusBar.IsClosable = true;
+        await RefreshStatusAsync();
+    }
 
     internal Task<RecoveryActionResult> ResetSettingsDefaultsAsync(
         CancellationToken cancellationToken) =>
@@ -443,38 +473,72 @@ public sealed partial class MainWindow
     {
         if (args.Length == 0 || string.IsNullOrWhiteSpace(args[0]))
             return false;
-        if (_customProfileInProgress)
+        var targetMode = NormalizeMode(args[0], string.Empty);
+        if (targetMode.Length == 0)
+            return false;
+        var preset = targetMode switch
         {
-            StatusText.Text = IsChinese ? "自定义预设正在应用，请稍候" : "A custom profile is still being applied";
+            "remote" => PowerModePreset.Remote,
+            "saver" => PowerModePreset.Saver,
+            "balanced" => PowerModePreset.Balanced,
+            "high" => PowerModePreset.High,
+            _ => throw new ArgumentOutOfRangeException(nameof(args))
+        };
+        var cpuMaximumPercent = args.Length > 1 && int.TryParse(args[1], out var cpu)
+            ? cpu
+            : (int?)null;
+        var disableWifi = args.Skip(1).Any(argument =>
+            string.Equals(argument, "nowifi", StringComparison.OrdinalIgnoreCase));
+        return await RunTargetCoreAsync(
+            PowerModeTarget.ForPreset(preset),
+            cpuMaximumPercent,
+            disableWifi,
+            context);
+    }
+
+    private async Task<bool> RunTargetCoreAsync(
+        PowerModeTarget target,
+        int? cpuMaximumPercent,
+        bool disableWifi,
+        SwitchRequestContext context,
+        CustomPowerProfile? customProfile = null)
+    {
+        if (_startupActivationDeferred)
+        {
+            PresentStartupRecovery(new(
+                true,
+                null,
+                null,
+                IsChinese
+                    ? "请先在恢复中心验证或恢复上次操作。"
+                    : "Verify or restore the last operation in Recovery Center first."));
+            return false;
+        }
+        if (_modeSwitchInProgress)
+        {
+            StatusText.Text = IsChinese
+                ? "另一项电源操作正在进行。"
+                : "Another power operation is in progress.";
             StatusBar.Severity = InfoBarSeverity.Warning;
             return false;
         }
 
-        var targetMode = NormalizeMode(args[0], args[0]);
-        args[0] = targetMode;
-        _pendingMode = targetMode;
+        var targetMode = target.Preset?.ToString().ToLowerInvariant() ?? target.Key;
+        _pendingMode = target.Preset?.ToString().ToLowerInvariant();
         if (context.AllowPreview &&
             string.Equals(context.Trigger, "manual", StringComparison.OrdinalIgnoreCase) &&
             _featureSettings.PreviewManualSwitches)
         {
             var preview = IsChinese
-                ? $"将立即切换到“{GetModeDisplayName(targetMode)}”。\n\n核心电源方案会先完成切换，CPU、亮度等细项随后在后台同步。"
-                : $"Switch to “{GetModeDisplayName(targetMode)}” now?\n\nThe core power plan changes first; CPU, brightness and other details sync in the background.";
+                ? $"切换到“{GetModeDisplayName(targetMode)}”并在完成后验证实际状态？"
+                : $"Switch to “{GetModeDisplayName(targetMode)}” and verify the resulting state?";
             if (!await ConfirmAsync(IsChinese ? "切换预览" : "Switch preview", preview))
+            {
+                _pendingMode = null;
                 return false;
+            }
         }
 
-        var generation = Interlocked.Increment(ref _modeSwitchGeneration);
-        var cancellation = new CancellationTokenSource();
-        var previousCancellation = Interlocked.Exchange(ref _modeSwitchCancellation, cancellation);
-        try { previousCancellation?.Cancel(); } catch (ObjectDisposedException) { }
-
-        var previousPlan = GetActivePlanGuidFast();
-        var previousMode = NormalizeMode(_featureSettings.LastMode, "unknown");
-        var stopwatch = Stopwatch.StartNew();
-        var activated = false;
-        var succeeded = false;
-        string? error = null;
         _modeSwitchInProgress = true;
         RenderRecommendation();
         BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
@@ -485,42 +549,45 @@ public sealed partial class MainWindow
 
         try
         {
-            await _activationGate.WaitAsync();
-            try
+            var result = await _modeSwitchCoordinator.TrySwitchAsync(new ModeSwitchRequest(
+                Guid.NewGuid(),
+                target,
+                cpuMaximumPercent,
+                disableWifi,
+                context.Trigger,
+                context.Reason,
+                context.RuleId,
+                context.RuleName,
+                _featureSettings.OperationHistoryEnabled && context.RecordHistory));
+            if (result is null)
             {
-                if (generation != Volatile.Read(ref _modeSwitchGeneration))
-                {
-                    error = "Superseded by a newer switch request.";
-                    return false;
-                }
-                activated = await ActivatePlanImmediatelyAsync(targetMode);
-            }
-            finally
-            {
-                _activationGate.Release();
-            }
-
-            if (activated)
-            {
-                ApplyOptimisticMode(args);
-                StatusText.Text = IsChinese ? "核心模式已切换，正在后台同步设置…" : "Core mode switched; syncing settings in the background…";
-                StatusBar.Severity = InfoBarSeverity.Informational;
-            }
-
-            var result = await RunCliAsync(args, manageBusy: false, cancellation.Token, updateStatus: false);
-            if (generation != Volatile.Read(ref _modeSwitchGeneration) || result.ExitCode == -2)
-            {
-                error = "Superseded by a newer switch request.";
+                StatusText.Text = IsChinese
+                    ? "电源操作被拒绝：另一操作正在进行或需要恢复。"
+                    : "Power operation rejected: another operation is active or recovery is required.";
+                StatusBar.Severity = InfoBarSeverity.Warning;
                 return false;
             }
 
-            succeeded = result.ExitCode == 0;
-            error = succeeded ? null : FirstNonEmpty(result.Error, result.Output, "PowerModeSwitcher failed.");
+            AppendLog(result.DiagnosticSummary);
+            PresentModeSwitchResult(result);
+            var succeeded = result.Outcome is
+                ModeSwitchOutcome.Succeeded or ModeSwitchOutcome.Partial;
             if (succeeded)
             {
-                if (!activated)
-                    ApplyOptimisticMode(args);
-                _featureSettings.LastMode = targetMode;
+                if (result.AfterState is { } afterState)
+                    ApplyPowerModeState(afterState);
+                if (customProfile is not null)
+                {
+                    _lastCustomProfile = customProfile;
+                    _activeModeKey = target.Key;
+                    ModeValue.Text = customProfile.Name;
+                    UpdateActiveMode(null);
+                    _featureSettings.LastMode = "saver";
+                }
+                else
+                {
+                    _featureSettings.LastMode = targetMode;
+                }
                 try
                 {
                     TrySaveSettings(_featureSettings);
@@ -530,108 +597,32 @@ public sealed partial class MainWindow
                 {
                     AppendLog($"Settings save: {settingsError.Message}");
                 }
-                StatusText.Text = IsChinese
-                    ? $"已切换：{GetModeDisplayName(targetMode)} · {stopwatch.Elapsed.TotalSeconds:0.0} 秒"
-                    : $"Switched: {GetModeDisplayName(targetMode)} · {stopwatch.Elapsed.TotalSeconds:0.0}s";
-                StatusBar.Severity = InfoBarSeverity.Success;
                 _systemIntegration.Notify(new UserNotification(
                     IsChinese ? "电源模式已切换" : "Power mode changed",
-                    GetModeDisplayName(targetMode),
+                    customProfile?.Name ?? GetModeDisplayName(targetMode),
                     NotificationSeverity.Success));
             }
-            else
+            else if (result.Rollback?.Succeeded == true && result.BeforeState is { } beforeState)
             {
-                await RestorePlanAsync(previousPlan);
-                StatusText.Text = IsChinese ? "切换失败，已恢复之前的电源方案" : "Switch failed; previous plan restored";
-                StatusBar.Severity = InfoBarSeverity.Error;
+                ApplyPowerModeState(beforeState);
             }
             return succeeded;
         }
-        catch (OperationCanceledException)
-        {
-            error = "Cancelled";
-            return false;
-        }
         catch (Exception ex)
         {
-            error = ex.Message;
-            if (generation == Volatile.Read(ref _modeSwitchGeneration))
-            {
-                await RestorePlanAsync(previousPlan);
-                StatusText.Text = IsChinese ? "切换失败，已恢复之前的电源方案" : "Switch failed; previous plan restored";
-                StatusBar.Severity = InfoBarSeverity.Error;
-            }
             AppendLog(ex.ToString());
+            StatusText.Text = ex.Message;
+            StatusBar.Severity = InfoBarSeverity.Error;
             return false;
         }
         finally
         {
-            stopwatch.Stop();
-            if (_featureSettings.OperationHistoryEnabled && context.RecordHistory)
-            {
-                await RecordSwitchHistoryAsync(new SwitchHistoryEntry
-                {
-                    Timestamp = DateTimeOffset.Now,
-                    OperationKind = "mode-switch",
-                    PreviousMode = previousMode,
-                    TargetMode = targetMode,
-                    Trigger = context.Trigger,
-                    Reason = context.Reason,
-                    RuleId = context.RuleId,
-                    RuleName = context.RuleName,
-                    Succeeded = succeeded,
-                    DurationMilliseconds = stopwatch.ElapsedMilliseconds,
-                    ErrorMessage = error
-                });
-            }
-
-            if (generation == Volatile.Read(ref _modeSwitchGeneration))
-            {
-                _pendingMode = null;
-                _modeSwitchInProgress = false;
-                Interlocked.CompareExchange(ref _modeSwitchCancellation, null, cancellation);
-                BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
-                RenderRecommendation();
-                if (succeeded)
-                    _ = RefreshStatusAfterModeSwitchAsync(generation);
-            }
-            cancellation.Dispose();
+            _pendingMode = null;
+            _modeSwitchInProgress = false;
+            BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            RenderRecommendation();
         }
     }
-
-    private async Task RefreshStatusAfterModeSwitchAsync(long generation)
-    {
-        try
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-            var result = await RunCliAsync(["status"], manageBusy: false, timeout.Token, updateStatus: false);
-            if (result.ExitCode == 0 &&
-                generation == Volatile.Read(ref _modeSwitchGeneration) &&
-                !_modeSwitchInProgress)
-                ApplyStatus(result.Output);
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"Status refresh after mode switch: {ex.Message}");
-        }
-    }
-
-    private async Task RecordSwitchHistoryAsync(SwitchHistoryEntry entry)
-    {
-        try
-        {
-            await HistoryStore.Default.RecordAsync(entry);
-            if (DateTimeOffset.Now.Minute == 0)
-                await HistoryStore.Default.TrimAsync();
-        }
-        catch (Exception ex)
-        {
-            DispatcherQueue.TryEnqueue(() => AppendLog($"Switch history: {ex.Message}"));
-        }
-    }
-
-    private static string FirstNonEmpty(params string?[] values) =>
-        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 
     private static string NormalizeMode(string? mode, string fallback)
     {
@@ -826,7 +817,6 @@ public sealed partial class MainWindow
 
         _advancedFeaturesInitialized = false;
         _recoveryLifetimeCancellation.Cancel();
-        try { _modeSwitchCancellation?.Cancel(); } catch { }
         try { _insightsWindow?.Close(); } catch { }
         _insightsWindow = null;
         try { _recoveryCenterWindow?.Close(); } catch { }

@@ -6,8 +6,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Win32;
-using System.Diagnostics;
-using System.Text;
+using System.Globalization;
 using Windows.Graphics;
 
 namespace PowerModeWinUI;
@@ -15,11 +14,22 @@ namespace PowerModeWinUI;
 public sealed partial class MainWindow : Window
 {
     private readonly string _cliPath;
-    private readonly string _scriptPath;
+    private readonly string _enginePath;
+    private readonly IProcessRunner _processRunner;
+    private readonly IPowerModeBackend _powerModeBackend;
+    private readonly ILastOperationStore _lastOperationStore;
+    private readonly IModeSwitchCoordinator _modeSwitchCoordinator;
+    private readonly ISettingsActivationCoordinator _settingsActivationCoordinator;
+    private readonly IStartupCoordinator _startupCoordinator;
     private string _language = "zh";
-    private bool _busy;
     private bool _syncingCpu;
     private readonly bool _startHidden;
+    private bool _startupActivationDeferred;
+    private PowerModeState? _startupPowerState;
+    private ModeSwitchResult? _lastModeSwitchResult;
+    private ModeSwitchPresentationAction _statusAction;
+    private bool _persistentModeSwitchPresentation;
+    private string _activeModeKey = "unknown";
 
     private readonly Dictionary<string, Dictionary<string, string>> _texts = new()
     {
@@ -61,7 +71,31 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         ConfigureWindow();
         _cliPath = FindCliPath();
-        _scriptPath = PrepareCachedScript(_cliPath);
+        _enginePath = FindEnginePath();
+        _processRunner = new ProcessRunner();
+        _powerModeBackend = new PowerModeBackend(_processRunner, _enginePath);
+        _lastOperationStore = new LastOperationStore();
+        _modeSwitchCoordinator = new ModeSwitchCoordinator(
+            _powerModeBackend,
+            _lastOperationStore,
+            HistoryStore.Default,
+            TimeProvider.System);
+        _settingsActivationCoordinator = new SettingsActivationCoordinator(
+            _settingsLoadResult,
+            new MainWindowSettingsActivationEffects(this));
+        _startupCoordinator = new StartupCoordinator(
+            _lastOperationStore,
+            _powerModeBackend,
+            (load, token) => _settingsActivationCoordinator.ActivateAsync(
+                SettingsActivationPolicy.For(load.State),
+                token));
+        _recoveryService = new RecoveryService(
+            _lastOperationStore,
+            _modeSwitchCoordinator,
+            HistoryStore.Default,
+            new ProductionRecoveryBackend(
+                _systemIntegration,
+                () => _featureSettings.ConfigurationBackupCount));
         _language = ReadLanguage();
         ApplyLanguage();
         InitializeFeatures();
@@ -74,12 +108,34 @@ public sealed partial class MainWindow : Window
         if (!_firstActivation) return;
         _firstActivation = false;
         if (_startHidden) AppWindow.Hide();
-        await RefreshStatusAsync();
-        _ = DetectCapabilitiesAndRefreshPresentationAsync();
-        if (CanPersistSettings && _featureSettings.ApplyLastModeOnStartup && !string.IsNullOrWhiteSpace(_featureSettings.LastMode))
-            await RunModeWithContextAsync(_featureSettings.LastMode,new SwitchRequestContext("startup",AllowPreview:false));
-        if (CanPersistSettings)
-            await RunStartupFeaturesAsync();
+        try
+        {
+            var initialization = await _startupCoordinator.InitializeAsync(
+                _settingsLoadResult);
+            _startupActivationDeferred = initialization.ActivationDeferred;
+            if (initialization.CurrentState is { } currentState)
+            {
+                _startupPowerState ??= currentState;
+                ApplyPowerModeState(currentState);
+            }
+
+            if (initialization.ActivationDeferred)
+            {
+                PresentStartupRecovery(initialization);
+                return;
+            }
+
+            await RefreshStatusAsync();
+            _ = DetectCapabilitiesAndRefreshPresentationAsync();
+        }
+        catch (Exception exception)
+        {
+            PresentStartupRecovery(new(
+                true,
+                null,
+                null,
+                exception.Message));
+        }
     }
 
     private void ConfigureWindow()
@@ -167,76 +223,74 @@ public sealed partial class MainWindow : Window
         return string.Empty;
     }
 
-    private static string PrepareCachedScript(string cliPath)
+    private static string FindEnginePath()
     {
-        if (string.IsNullOrWhiteSpace(cliPath) || !File.Exists(cliPath)) return string.Empty;
-        try
+        var configuredPath = Environment.GetEnvironmentVariable("POWERMODE_ENGINE_PATH");
+        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
+            return Path.GetFullPath(configuredPath);
+
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
         {
-            const string marker = "### POWERSHELL_PAYLOAD_BELOW ###";
-            var lines = File.ReadAllLines(cliPath, Encoding.UTF8);
-            var index = Array.FindIndex(lines, line => line.Trim() == marker);
-            if (index < 0 || index + 1 >= lines.Length) return string.Empty;
-            var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PowerMode", "Cache");
-            Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, $"PowerModeSwitcher-winui-{File.GetLastWriteTimeUtc(cliPath).Ticks}.ps1");
-            if (!File.Exists(path)) File.WriteAllText(path, string.Join(Environment.NewLine, lines[(index + 1)..]), new UTF8Encoding(true));
-            return path;
+            var candidates = new[]
+            {
+                Path.Combine(current.FullName, "PowerMode.Engine.ps1"),
+                Path.Combine(current.FullName, "PowerMode.Cli", "PowerMode.Engine.ps1"),
+                Path.Combine(current.FullName, "src", "PowerMode.Cli", "PowerMode.Engine.ps1")
+            };
+            foreach (var candidate in candidates)
+                if (File.Exists(candidate)) return candidate;
+            current = current.Parent;
         }
-        catch { return string.Empty; }
+        return string.Empty;
     }
 
-    private async Task<CommandResult> RunCliAsync(
-        string[] args,
-        bool manageBusy = true,
-        CancellationToken cancellationToken = default,
-        bool updateStatus = true)
+    private async Task<bool> RunLanguageUtilityAsync(
+        string language,
+        CancellationToken cancellationToken = default)
     {
-        if (manageBusy && _busy) return new(-1, string.Empty, "Busy");
         if (string.IsNullOrWhiteSpace(_cliPath) || !File.Exists(_cliPath))
         {
             await ShowMessageAsync("PowerMode", T("CliMissing"));
-            return new(1, string.Empty, T("CliMissing"));
+            return false;
         }
-        if (manageBusy) { _busy = true; SetControlsEnabled(false, includeModeControls: false); }
-        var command = string.Join(' ', args);
-        if(updateStatus){StatusText.Text=string.Format(T("Running"),command); StatusBar.Severity=InfoBarSeverity.Informational;} AppendLog($"[{DateTime.Now:HH:mm:ss}]  › PowerModeSwitcher {command}");
-        var stopwatch=Stopwatch.StartNew();
-        try
-        {
-            var cached=!string.IsNullOrWhiteSpace(_scriptPath)&&File.Exists(_scriptPath);
-            var psi=new ProcessStartInfo(cached?"powershell.exe":"cmd.exe") { WorkingDirectory=Path.GetDirectoryName(_cliPath)!, UseShellExecute=false, RedirectStandardOutput=true, RedirectStandardError=true, CreateNoWindow=true, StandardOutputEncoding=Encoding.UTF8, StandardErrorEncoding=Encoding.UTF8 };
-            if(cached){ psi.ArgumentList.Add("-NoLogo");psi.ArgumentList.Add("-NoProfile");psi.ArgumentList.Add("-ExecutionPolicy");psi.ArgumentList.Add("Bypass");psi.ArgumentList.Add("-File");psi.ArgumentList.Add(_scriptPath);foreach(var arg in args)psi.ArgumentList.Add(arg); }
-            else psi.Arguments=$"/c \"\"{_cliPath}\" {string.Join(' ',args)}\"";
-            psi.EnvironmentVariables["PM_NO_PAUSE"]="1";
-            using var process=Process.Start(psi); if(process is null)return new(1,string.Empty,"Process start failed");
-            var output=new StringBuilder();var error=new StringBuilder();
-            var outputTask=PumpOutputAsync(process.StandardOutput,output,isError:false);var errorTask=PumpOutputAsync(process.StandardError,error,isError:true);
-            try{await process.WaitForExitAsync(cancellationToken);}
-            catch(OperationCanceledException)
-            {
-                try{if(!process.HasExited)process.Kill(true);}catch{}
-                try{await process.WaitForExitAsync();}catch{}
-                try{await Task.WhenAll(outputTask,errorTask);}catch{}
-                AppendLogLine($"[{DateTime.Now:HH:mm:ss}]  ✕ Cancelled · {stopwatch.Elapsed.TotalSeconds:0.0}s");AppendLogLine(new string('─',48));
-                return new(-2,output.ToString(),"Cancelled");
-            }
-            await Task.WhenAll(outputTask,errorTask);
-            var result=new CommandResult(process.ExitCode,output.ToString(),error.ToString());
-            AppendLogLine($"[{DateTime.Now:HH:mm:ss}]  {(process.ExitCode==0?"✓":"✕")} Exit {process.ExitCode} · {stopwatch.Elapsed.TotalSeconds:0.0}s");AppendLogLine(new string('─',48));
-            if(updateStatus){StatusText.Text=string.Format(process.ExitCode==0?T("Done"):T("Failed"),command,stopwatch.Elapsed.TotalSeconds); StatusBar.Severity=process.ExitCode==0?InfoBarSeverity.Success:InfoBarSeverity.Error;}
-            return result;
-        }
-        catch(Exception ex){AppendLog($"[{DateTime.Now:HH:mm:ss}]  ! {ex.Message}");if(updateStatus){StatusText.Text=string.Format(T("Failed"),command,stopwatch.Elapsed.TotalSeconds);StatusBar.Severity=InfoBarSeverity.Error;}return new(1,string.Empty,ex.Message);}
-        finally{if(manageBusy){_busy=false;SetControlsEnabled(true, includeModeControls: false);}}
+        var execution = await _processRunner.RunAsync(
+            new ProcessExecutionRequest(
+                "cmd.exe",
+                ["/d", "/s", "/c", $"\"\"{_cliPath}\" lang {language}\""],
+                TimeSpan.FromSeconds(10),
+                Path.GetDirectoryName(_cliPath),
+                new Dictionary<string, string?> { ["PM_NO_PAUSE"] = "1" }),
+            cancellationToken);
+        AppendProcessDiagnostics("lang", execution);
+        return execution.Succeeded;
     }
-    private Task<CommandResult> RunCliAsync(params string[] args)=>RunCliAsync(args,true);
 
-    private async Task PumpOutputAsync(StreamReader reader,StringBuilder buffer,bool isError)
+    private void AppendProcessDiagnostics(string action, ProcessExecutionResult execution)
     {
-        while(await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+        AppendLogLine(
+            $"[{DateTime.Now:HH:mm:ss}] {action} exit={execution.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
+            $"timeout={execution.TimedOut} cancelled={execution.Cancelled} duration={execution.Duration.TotalSeconds:0.0}s");
+        if (!string.IsNullOrWhiteSpace(execution.StandardOutput))
+            AppendLog(execution.StandardOutput);
+        if (!string.IsNullOrWhiteSpace(execution.StandardError))
+            AppendLog(execution.StandardError);
+        if (!string.IsNullOrWhiteSpace(execution.StartError))
+            AppendLog(execution.StartError);
+    }
+
+    private void AppendBackendDiagnostics(BackendOperationResult operation)
+    {
+        AppendLogLine(
+            $"[{DateTime.Now:HH:mm:ss}] {operation.Action} operation={operation.OperationId:D} outcome={operation.Outcome}");
+        if (!string.IsNullOrWhiteSpace(operation.ContractError))
+            AppendLog(operation.ContractError);
+        if (operation.ProcessDiagnostics is { } process)
         {
-            buffer.AppendLine(line);
-            DispatcherQueue.TryEnqueue(()=>AppendLogLine(isError?$"  ! {line}":$"  {line}"));
+            if (!string.IsNullOrWhiteSpace(process.StandardError))
+                AppendLog(process.StandardError);
+            if (!string.IsNullOrWhiteSpace(process.StartError))
+                AppendLog(process.StartError);
         }
     }
 
@@ -277,77 +331,125 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshStatusAsync()
     {
+        if (_modeSwitchInProgress)
+            return;
         RefreshIcon.Visibility=Visibility.Collapsed;RefreshProgressRing.Visibility=Visibility.Visible;RefreshProgressRing.IsActive=true;
         try
         {
-            using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(12));
-            var generation=Volatile.Read(ref _modeSwitchGeneration);var result=await RunCliAsync(["status"],true,timeout.Token);
-            if(result.ExitCode==-2){StatusText.Text=T("RefreshTimeout");StatusBar.Severity=InfoBarSeverity.Warning;return;}
-            if(result.ExitCode!=0){StatusBar.Severity=InfoBarSeverity.Error;return;}
-            if(generation==Volatile.Read(ref _modeSwitchGeneration)&&!_modeSwitchInProgress)ApplyStatus(result.Output);
-            StatusBar.Severity=InfoBarSeverity.Success;
+            var result = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
+            AppendBackendDiagnostics(result.Operation);
+            if (result.State is null)
+            {
+                if (!_persistentModeSwitchPresentation)
+                {
+                    StatusText.Text = result.Operation.Outcome == BackendOperationOutcome.TimedOut
+                        ? T("RefreshTimeout")
+                        : (IsChinese ? "无法可靠读取当前电源状态" : "The current power state could not be read reliably");
+                    StatusBar.Severity = result.Operation.Outcome == BackendOperationOutcome.TimedOut
+                        ? InfoBarSeverity.Warning
+                        : InfoBarSeverity.Error;
+                    StatusBar.IsOpen = true;
+                }
+                return;
+            }
+
+            _startupPowerState ??= result.State;
+            ApplyPowerModeState(result.State);
+            if (!_persistentModeSwitchPresentation)
+            {
+                StatusText.Text = IsChinese ? "电源状态已刷新" : "Power state refreshed";
+                StatusBar.Severity = result.Operation.Outcome == BackendOperationOutcome.Partial
+                    ? InfoBarSeverity.Warning
+                    : InfoBarSeverity.Success;
+                StatusBar.IsOpen = true;
+            }
+        }
+        catch (Exception exception)
+        {
+            if (!_persistentModeSwitchPresentation)
+            {
+                StatusText.Text = exception.Message;
+                StatusBar.Severity = InfoBarSeverity.Error;
+                StatusBar.IsOpen = true;
+            }
         }
         finally
         {
             RefreshProgressRing.IsActive=false;RefreshProgressRing.Visibility=Visibility.Collapsed;RefreshIcon.Visibility=Visibility.Visible;
         }
     }
-    private void ApplyStatus(string output)
+
+    private void ApplyPowerModeState(PowerModeState state)
     {
-        var rawMode=Extract(output,"当前模式","Current mode");var rawGpu=Extract(output,"独显功耗","dGPU power");var rawPower=Extract(output,"供电","Power");
-        var rawCpu=Extract(output,"CPU 上限","CPU max");var rawBrightness=Extract(output,"亮度","Brightness");var rawSleep=Extract(output,"睡眠","Sleep");var rawDisplay=Extract(output,"关屏","Display off");
-        var onBattery=rawPower.Contains("电池",StringComparison.OrdinalIgnoreCase)||rawPower.Contains("battery",StringComparison.OrdinalIgnoreCase);
-        ModeValue.Text=CompactMode(rawMode);GpuValue.Text=CompactGpu(rawGpu);PowerValue.Text=rawPower;CpuValue.Text=SelectPowerBranch(rawCpu,onBattery);BrightnessValue.Text=SelectPowerBranch(rawBrightness,onBattery);SleepValue.Text=$"{FormatDuration(SelectPowerBranch(rawDisplay,onBattery))} / {FormatDuration(SelectPowerBranch(rawSleep,onBattery))}";
-        var displayLabel=_language=="zh"?"关屏":"Display off";var sleepLabel=_language=="zh"?"睡眠":"Sleep";
-        ToolTipService.SetToolTip(ModeValue,rawMode);ToolTipService.SetToolTip(GpuValue,rawGpu);ToolTipService.SetToolTip(CpuValue,rawCpu);ToolTipService.SetToolTip(BrightnessValue,rawBrightness);ToolTipService.SetToolTip(SleepValue,$"{displayLabel}：{rawDisplay}\n{sleepLabel}：{rawSleep}");
+        var onBattery = state.PowerSource == PowerSourceKind.Battery;
+        var modeKey = state.DetectedMode?.ToString().ToLowerInvariant();
+        _activeModeKey = modeKey ?? "unknown";
+        ModeValue.Text = state.DetectedMode switch
+        {
+            PowerModePreset.Remote => T("ModeRemote"),
+            PowerModePreset.Saver => T("ModeSaver"),
+            PowerModePreset.Balanced => T("ModeBalanced"),
+            PowerModePreset.High => T("ModeHigh"),
+            _ => state.ActiveSchemeName ?? T("Unknown")
+        };
+        GpuValue.Text = state.DiscreteGpuPowerWatts.HasValue
+            ? $"{state.DiscreteGpuPowerWatts.Value:0.##} W"
+            : T("Unknown");
+        PowerValue.Text = FormatPowerSource(state.PowerSource);
+        CpuValue.Text = FormatPercent(onBattery
+            ? state.CpuMaximumDcPercent
+            : state.CpuMaximumAcPercent);
+        BrightnessValue.Text = FormatPercent(onBattery
+            ? state.BrightnessDcPercent
+            : state.BrightnessAcPercent);
+        var display = onBattery
+            ? state.DisplayTimeoutDcSeconds
+            : state.DisplayTimeoutAcSeconds;
+        var sleep = onBattery
+            ? state.SleepTimeoutDcSeconds
+            : state.SleepTimeoutAcSeconds;
+        SleepValue.Text = $"{FormatDuration(display)} / {FormatDuration(sleep)}";
+
+        ToolTipService.SetToolTip(ModeValue, state.ActiveSchemeName ?? ModeValue.Text);
+        ToolTipService.SetToolTip(GpuValue, GpuValue.Text);
+        ToolTipService.SetToolTip(
+            CpuValue,
+            $"AC {FormatPercent(state.CpuMaximumAcPercent)} / DC {FormatPercent(state.CpuMaximumDcPercent)}");
+        ToolTipService.SetToolTip(
+            BrightnessValue,
+            $"AC {FormatPercent(state.BrightnessAcPercent)} / DC {FormatPercent(state.BrightnessDcPercent)}");
+        ToolTipService.SetToolTip(
+            SleepValue,
+            $"AC {FormatDuration(state.DisplayTimeoutAcSeconds)} / {FormatDuration(state.SleepTimeoutAcSeconds)}\n" +
+            $"DC {FormatDuration(state.DisplayTimeoutDcSeconds)} / {FormatDuration(state.SleepTimeoutDcSeconds)}");
         LastUpdatedText.Text = string.Format(T("LastUpdated"), DateTime.Now.ToString("HH:mm:ss"));
-        UpdateActiveMode(rawMode);
-    }
-    private string CompactMode(string value)
-    {
-        var text=value.ToLowerInvariant();if(text.Contains("remote")||text.Contains("远程"))return T("ModeRemote");if(text.Contains("saver")||text.Contains("低功耗"))return T("ModeSaver");if(text.Contains("balanced")||text.Contains("平衡"))return T("ModeBalanced");if(text.Contains("high")||text.Contains("高性能"))return T("ModeHigh");var parenthesis=value.IndexOf('(');return parenthesis>0?value[..parenthesis].Trim():value;
-    }
-    private static string CompactGpu(string value){var parenthesis=value.IndexOf('(');return parenthesis>0?value[..parenthesis].Trim():value;}
-    private static string SelectPowerBranch(string value,bool onBattery)
-    {
-        var prefix=onBattery?"DC ":"AC ";foreach(var part in value.Split('/')){var item=part.Trim();if(item.StartsWith(prefix,StringComparison.OrdinalIgnoreCase))return item[prefix.Length..].Trim();}return value;
-    }
-    private string FormatDuration(string value)
-    {
-        var text=value.Trim();
-        if(!text.EndsWith('s')||!int.TryParse(text[..^1],out var seconds)||seconds<0)return text;
-        if(seconds==0)return _language=="zh"?"永不":"Never";
-        if(seconds%3600==0){var hours=seconds/3600;return _language=="zh"?$"{hours} 小时":$"{hours} {(hours==1?"hour":"hours")}";}
-        if(seconds%60==0){var minutes=seconds/60;return _language=="zh"?$"{minutes} 分钟":$"{minutes} {(minutes==1?"minute":"minutes")}";}
-        return _language=="zh"?$"{seconds} 秒":$"{seconds} {(seconds==1?"second":"seconds")}";
-    }
-    private string Extract(string output,params string[] labels)
-    {
-        foreach(var line in output.Split(['\r','\n'],StringSplitOptions.RemoveEmptyEntries)){var text=line.Trim();foreach(var label in labels){if(!text.StartsWith(label,StringComparison.OrdinalIgnoreCase))continue;var i=text.IndexOf(':');if(i>=0)return text[(i+1)..].Trim();}}
-        return T("Unknown");
+        UpdateActiveMode(modeKey);
     }
 
+    private string FormatPowerSource(PowerSourceKind source) => source switch
+    {
+        PowerSourceKind.Ac => IsChinese ? "交流电" : "AC power",
+        PowerSourceKind.Battery => IsChinese ? "电池" : "Battery",
+        PowerSourceKind.Charging => IsChinese ? "充电中" : "Charging",
+        PowerSourceKind.Full => IsChinese ? "已充满" : "Full",
+        _ => T("Unknown")
+    };
+
+    private string FormatDuration(int? seconds)
+    {
+        if (!seconds.HasValue || seconds.Value < 0) return T("Unknown");
+        if(seconds.Value==0)return _language=="zh"?"永不":"Never";
+        if(seconds.Value%3600==0){var hours=seconds.Value/3600;return _language=="zh"?$"{hours} 小时":$"{hours} {(hours==1?"hour":"hours")}";}
+        if(seconds.Value%60==0){var minutes=seconds.Value/60;return _language=="zh"?$"{minutes} 分钟":$"{minutes} {(minutes==1?"minute":"minutes")}";}
+        return _language=="zh"?$"{seconds.Value} 秒":$"{seconds.Value} {(seconds.Value==1?"second":"seconds")}";
+    }
+
+    private string FormatPercent(int? value) => value.HasValue ? $"{value.Value}%" : T("Unknown");
+
     private Task<bool> RunModeAsync(params string[] args)=>RunModeCoreAsync(args,SwitchRequestContext.Manual);
-    private static async Task<bool> ActivatePlanImmediatelyAsync(string mode)
+    private void UpdateActiveMode(string? activeMode)
     {
-        var guid=mode.ToLowerInvariant() switch{"remote" or "saver"=>SaverGuid,"balanced"=>BalancedGuid,"high"=>HighGuid,_=>string.Empty};if(guid.Length==0)return false;
-        try{using var p=Process.Start(new ProcessStartInfo("powercfg.exe",$"/setactive {guid}"){UseShellExecute=false,CreateNoWindow=true});if(p is null)return false;await p.WaitForExitAsync();return p.ExitCode==0;}catch{return false;}
-    }
-    private void ApplyOptimisticMode(string[] args)
-    {
-        var mode=args[0].ToLowerInvariant();var custom=args.Length>1&&int.TryParse(args[1],out var value)?value:0;
-        ModeValue.Text=mode switch{"remote"=>T("ModeRemote"),"saver"=>T("ModeSaver"),"balanced"=>T("ModeBalanced"),"high"=>T("ModeHigh"),_=>mode};
-        CpuValue.Text=mode switch{"remote"=>$"{(custom>0?custom:32)}%","saver"=>$"{(custom>0?custom:30)}%",_=>"100%"};
-        BrightnessValue.Text=mode is "remote" or "saver"?"50%":"100%";
-        SleepValue.Text=mode is "remote" or "saver"
-            ? $"{FormatDuration("60s")} / {FormatDuration("0s")}"
-            : (_language=="zh"?"正在同步…":"Syncing…");
-        UpdateActiveMode(mode);
-    }
-    private void UpdateActiveMode(string text)
-    {
-        var value=text.ToLowerInvariant();
-        var activeMode=value.Contains("remote")||value.Contains("远程")?"remote":value.Contains("saver")||value.Contains("低功耗")?"saver":value.Contains("balanced")||value.Contains("平衡")?"balanced":value.Contains("high")||value.Contains("高性能")?"high":"unknown";
+        activeMode = NormalizeMode(activeMode, "unknown");
         var buttons=new[]
         {
             (Mode:"remote",Button:RemoteButton,Name:T("ModeRemote")),
@@ -371,6 +473,97 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void PresentModeSwitchResult(ModeSwitchResult result)
+    {
+        _lastModeSwitchResult = result;
+        var state = ModeSwitchResultPresentationPolicy.Create(
+            result,
+            _featureSettings.ExperienceMode,
+            IsChinese);
+        _statusAction = state.Action;
+        _persistentModeSwitchPresentation = state.IsPersistent;
+        StatusText.Text = state.Summary;
+        StatusBar.Severity = state.Severity switch
+        {
+            ModeSwitchPresentationSeverity.Success => InfoBarSeverity.Success,
+            ModeSwitchPresentationSeverity.Warning => InfoBarSeverity.Warning,
+            ModeSwitchPresentationSeverity.Error => InfoBarSeverity.Error,
+            _ => InfoBarSeverity.Informational
+        };
+        StatusBar.IsOpen = true;
+        StatusBar.IsClosable = true;
+        AutomationProperties.SetName(StatusBar, state.AccessibleName);
+        StatusActionButton.Content = state.ActionText;
+        StatusActionButton.Visibility = state.Action == ModeSwitchPresentationAction.None
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        ModeSwitchDiagnosticText.Text = state.ShowDiagnosticDetails
+            ? result.DiagnosticSummary
+            : string.Empty;
+        var diagnosticVisibility = state.ShowDiagnosticDetails
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ModeSwitchDiagnosticText.Visibility = diagnosticVisibility;
+        CopyModeSwitchDiagnosticButton.Visibility = diagnosticVisibility;
+    }
+
+    private void PresentStartupRecovery(StartupInitializationResult result)
+    {
+        _statusAction = ModeSwitchPresentationAction.OpenRecoveryCenter;
+        _persistentModeSwitchPresentation = true;
+        StatusText.Text = result.Error ?? (IsChinese
+            ? "上次电源操作需要验证或恢复。"
+            : "The last power operation must be verified or restored.");
+        StatusBar.Severity = InfoBarSeverity.Error;
+        StatusBar.IsOpen = true;
+        StatusBar.IsClosable = true;
+        StatusActionButton.Content = IsChinese ? "立即打开恢复中心" : "Open Recovery Center now";
+        StatusActionButton.Visibility = Visibility.Visible;
+        ModeSwitchDiagnosticText.Visibility = Visibility.Collapsed;
+        CopyModeSwitchDiagnosticButton.Visibility = Visibility.Collapsed;
+    }
+
+    private async void StatusActionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_statusAction == ModeSwitchPresentationAction.OpenRecoveryCenter)
+        {
+            OpenRecoveryCenterButton_Click(sender, e);
+            return;
+        }
+        if (_statusAction != ModeSwitchPresentationAction.ReviewPartialDetails ||
+            _lastModeSwitchResult is not { } result)
+            return;
+
+        var failedItems = result.Steps
+            .Where(step => !step.Critical &&
+                (step.TimedOut || step.ExitCode is not null and not 0 ||
+                    !string.IsNullOrWhiteSpace(step.Error)))
+            .Select(step => step.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var details = failedItems.Length == 0
+            ? (IsChinese ? "没有可显示的可选项目详情。" : "No optional item details are available.")
+            : string.Join(Environment.NewLine, failedItems.Select(name => $"• {name}"));
+        await ShowMessageAsync(
+            IsChinese ? "未应用的项目" : "Items not applied",
+            details);
+    }
+
+    private void CopyModeSwitchDiagnosticButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastModeSwitchResult is not { DiagnosticSummary.Length: > 0 } result)
+            return;
+        var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        package.SetText(result.DiagnosticSummary);
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+    }
+
+    private void StatusBar_Closed(InfoBar sender, InfoBarClosedEventArgs args)
+    {
+        _persistentModeSwitchPresentation = false;
+    }
+
     private async Task ShowMessageAsync(string title,string content)
     {
         var dialog=new ContentDialog{Title=title,Content=content,CloseButtonText=T("Confirm"),XamlRoot=RootGrid.XamlRoot};await dialog.ShowAsync();
@@ -388,10 +581,19 @@ public sealed partial class MainWindow : Window
     private async void RemoteCustomButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("remote",((int)CpuBox.Value).ToString());
     private async void RemoteNoWifiButton_Click(object sender,RoutedEventArgs e){if(await ConfirmAsync(T("ConfirmNoWifiTitle"),T("ConfirmNoWifi")))await RunModeAsync("remote",((int)CpuBox.Value).ToString(),"nowifi");}
     private async void VerifyButton_Click(object sender,RoutedEventArgs e)=>await VerifyWithSummaryAsync();
-    private async void LanguageButton_Click(object sender,RoutedEventArgs e){var next=_language=="zh"?"en":"zh";var result=await RunCliAsync("lang",next);if(result.ExitCode!=0)return;_language=next;ApplyLanguage();ApplyExperienceMode(_featureSettings.ExperienceMode);await RefreshStatusAsync();}
+    private async void LanguageButton_Click(object sender,RoutedEventArgs e)
+    {
+        var next=_language=="zh"?"en":"zh";
+        if (!await RunLanguageUtilityAsync(next))
+        {
+            StatusText.Text = IsChinese ? "语言切换失败" : "Language switch failed";
+            StatusBar.Severity = InfoBarSeverity.Error;
+            return;
+        }
+        _language=next;ApplyLanguage();ApplyExperienceMode(_featureSettings.ExperienceMode);await RefreshStatusAsync();
+    }
     private void ClearLogButton_Click(object sender,RoutedEventArgs e){LogBox.Text=string.Empty;_logLineCount=0;UpdateLogStats();}
     private void CopyLogButton_Click(object sender,RoutedEventArgs e){if(string.IsNullOrWhiteSpace(LogBox.Text))return;var package=new Windows.ApplicationModel.DataTransfer.DataPackage();package.SetText(LogBox.Text);Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);StatusText.Text=T("Copied");StatusBar.Severity=InfoBarSeverity.Success;}
     private void CpuSlider_ValueChanged(object sender,RangeBaseValueChangedEventArgs e){if(_syncingCpu||CpuBox is null)return;_syncingCpu=true;CpuBox.Value=Math.Round(e.NewValue);_syncingCpu=false;}
     private void CpuBox_ValueChanged(NumberBox sender,NumberBoxValueChangedEventArgs args){if(_syncingCpu||CpuSlider is null||double.IsNaN(args.NewValue))return;_syncingCpu=true;CpuSlider.Value=Math.Clamp(args.NewValue,20,50);_syncingCpu=false;}
-    private readonly record struct CommandResult(int ExitCode, string Output, string Error);
 }

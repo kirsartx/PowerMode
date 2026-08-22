@@ -159,9 +159,51 @@
             </Border>
         </Grid>
 
-        <InfoBar x:Name="StatusBar" Grid.Row="3" IsOpen="True" IsClosable="False" Severity="Informational">
+        <InfoBar x:Name="StatusBar"
+                 Grid.Row="3"
+                 IsOpen="True"
+                 IsClosable="True"
+                 Severity="Informational"
+                 Closed="StatusBar_Closed">
             <InfoBar.Content>
-                <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions><TextBlock x:Name="StatusText" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite"/><ProgressBar x:Name="BusyProgress" Grid.Column="1" IsIndeterminate="True" Visibility="Collapsed" VerticalAlignment="Center"/>
+                <Grid ColumnSpacing="12" RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="130"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="StatusText"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               AutomationProperties.LiveSetting="Polite"/>
+                    <Button x:Name="StatusActionButton"
+                            Grid.Column="1"
+                            Visibility="Collapsed"
+                            Click="StatusActionButton_Click"/>
+                    <ProgressBar x:Name="BusyProgress"
+                                 Grid.Column="2"
+                                 IsIndeterminate="True"
+                                 Visibility="Collapsed"
+                                 VerticalAlignment="Center"/>
+                    <Grid Grid.Row="1" Grid.ColumnSpan="3" ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ModeSwitchDiagnosticText"
+                                   Visibility="Collapsed"
+                                   FontFamily="Cascadia Mono"
+                                   TextWrapping="Wrap"/>
+                        <Button x:Name="CopyModeSwitchDiagnosticButton"
+                                Grid.Column="1"
+                                Content="Copy"
+                                Visibility="Collapsed"
+                                Click="CopyModeSwitchDiagnosticButton_Click"/>
+                    </Grid>
                 </Grid>
             </InfoBar.Content>
         </InfoBar>

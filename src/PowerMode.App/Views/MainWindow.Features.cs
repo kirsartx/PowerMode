@@ -3,40 +3,34 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.RegularExpressions;
 using Windows.System;
 
 namespace PowerModeWinUI;
 
 public sealed partial class MainWindow
 {
-    internal const string SaverGuid="a1841308-3541-4fab-bc81-f71556f20b4a";
-    internal const string BalancedGuid="381b4222-f694-41f0-9685-ff5bb260df2e";
-    internal const string HighGuid="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
     private const uint WmHotkey=0x0312,WmTray=0x8000+100,WmLButtonDblClk=0x0203,WmRButtonUp=0x0205;
     private const uint ModAlt=0x0001,ModControl=0x0002;
     private SettingsLoadResult _settingsLoadResult=default!;
     private PowerModeSettings _featureSettings=default!;
     private DispatcherTimer? _featureTimer;
     private bool _featureTickInProgress;
-    private string _startupPlanGuid=string.Empty,_lastAutoMode=string.Empty;
+    private string _lastAutoMode=string.Empty;
     private CustomPowerProfile? _lastCustomProfile;
-    private bool _customProfileInProgress;
     private SettingsWindow? _settingsWindow;
     private IntPtr _hwnd;
     private Native.SubclassProc? _subclassProc;
     private bool _trayAdded;
     private bool _globalHotkeysAvailable;
+    private bool _closingAfterRestore;
     private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
     private HardwareCapabilityService? _hardwareCapabilityService;
     private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
 
     internal HardwareCapabilities HardwareCapabilities => _hardwareCapabilities;
-    internal bool CanPersistSettings => _settingsLoadResult.AllowsExternalSideEffects;
+    internal bool CanPersistSettings => _settingsActivationCoordinator.CanPersistSettings;
 
     internal bool TrySaveSettings(PowerModeSettings settings)
     {
@@ -63,6 +57,7 @@ public sealed partial class MainWindow
         _settingsLoadResult = new SettingsLoadResult(
             SettingsLoadState.Loaded,
             settings);
+        _settingsActivationCoordinator.AcceptRecoveredSettings(_settingsLoadResult);
         _featureSettings = settings;
         ApplyFeatureSettings(settings);
         StatusBar.Severity = InfoBarSeverity.Success;
@@ -81,12 +76,12 @@ public sealed partial class MainWindow
 
     private void InitializeFeatures()
     {
-        _hwnd=WinRT.Interop.WindowNative.GetWindowHandle(this);_startupPlanGuid=GetActivePlanGuidFast();
+        _hwnd=WinRT.Interop.WindowNative.GetWindowHandle(this);
         _subclassProc=WindowSubclassProc;Native.SetWindowSubclass(_hwnd,_subclassProc,1,UIntPtr.Zero);
         RegisterGlobalHotkeys();AddTrayIcon();
         _hardwareCapabilityService=new HardwareCapabilityService(new WindowsHardwareCapabilityProbe(
             ()=>_trayAdded,()=>_globalHotkeysAvailable));
-        InitializeAdvancedFeatures();ApplyFeatureSettings(_featureSettings);
+        InitializeAdvancedFeatures();ApplyFeatureSettingsPresentation(_featureSettings);
         AppWindow.Changed+=AppWindow_Changed;AppWindow.Closing+=AppWindow_Closing;
     }
 
@@ -126,21 +121,50 @@ public sealed partial class MainWindow
     internal void ApplyFeatureSettings(PowerModeSettings settings)
     {
         _featureSettings=settings;
-        ApplyExperienceMode(settings.ExperienceMode);
-        AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
-        if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
+        ApplyFeatureSettingsPresentation(settings);
         if (!CanPersistSettings)
         {
             _featureTimer?.Stop();
             ShowCorruptSettingsWarning();
             return;
         }
+        ConfigureFeatureTimer(settings);
+        _=ConfigureMonitoringAsync();ApplySystemSettings(settings);
+        _=BackupSettingsIfChangedAsync(settings.ConfigurationBackupCount, "settings-save");
+        _=RefreshRecommendationAsync();
+    }
+
+    private void ApplyFeatureSettingsPresentation(PowerModeSettings settings)
+    {
+        ApplyExperienceMode(settings.ExperienceMode);
+        AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
+        if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
+    }
+
+    private void ConfigureFeatureTimer(PowerModeSettings settings)
+    {
         _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;_featureTimer.Start();
-        _=ConfigureMonitoringAsync();ApplySystemSettings(settings);_=RefreshRecommendationAsync();
+    }
+
+    private sealed class MainWindowSettingsActivationEffects(MainWindow owner)
+        : ISettingsActivationEffects
+    {
+        public void StartFeatureTimer() => owner.ConfigureFeatureTimer(owner._featureSettings);
+        public void ConfigureMonitoring() => _ = owner.ConfigureMonitoringAsync();
+        public void ConfigureStartup() => owner.ApplySystemSettings(owner._featureSettings);
+        public Task CreateStartupBackupAsync(CancellationToken cancellationToken) =>
+            owner.BackupSettingsIfChangedAsync(
+                owner._featureSettings.ConfigurationBackupCount,
+                "startup");
+        public void StartAutomation() => _ = owner.RefreshRecommendationAsync();
+        public Task ApplyLastModeAsync(CancellationToken cancellationToken) =>
+            owner.ApplyLastModeOnStartupAsync(cancellationToken);
+        public Task CheckUpdatesAsync(CancellationToken cancellationToken) =>
+            owner.RunStartupFeaturesAsync(cancellationToken);
     }
     private async void FeatureTimer_Tick(object? sender,object e)
     {
-        if(_featureTickInProgress||_busy||_modeSwitchInProgress)return;
+        if(_featureTickInProgress||_modeSwitchInProgress)return;
         _featureTickInProgress=true;
         try
         {
@@ -165,12 +189,26 @@ public sealed partial class MainWindow
     {
         if(args.DidPresenterChange&&sender.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p&&p.State==Microsoft.UI.Windowing.OverlappedPresenterState.Minimized)sender.Hide();
     }
-    private void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender,Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
+    private async void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender,Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
+        if (!_closingAfterRestore &&
+            _featureSettings.RestorePlanOnExit &&
+            _startupPowerState?.DetectedMode is { } startupMode)
+        {
+            args.Cancel = true;
+            _closingAfterRestore = true;
+            await RunModeWithContextAsync(
+                startupMode.ToString().ToLowerInvariant(),
+                new SwitchRequestContext(
+                    "shutdown",
+                    IsChinese ? "退出时恢复启动模式" : "Restore startup mode on exit",
+                    AllowPreview: false));
+            Close();
+            return;
+        }
         _capabilityPresentationLifetime.Dispose();
         _hardwareCapabilityService?.Dispose();
         DpiAwareWindowSizer.SavePlacement(this);
-        if(_featureSettings.RestorePlanOnExit&&!string.IsNullOrEmpty(_startupPlanGuid)){try{using var p=Process.Start(new ProcessStartInfo("powercfg.exe",$"/setactive {_startupPlanGuid}"){UseShellExecute=false,CreateNoWindow=true});p?.WaitForExit(2500);}catch{}}
         CleanupNativeFeatures();
     }
 
@@ -204,16 +242,6 @@ public sealed partial class MainWindow
         var mode=command switch{1=>"remote",2=>"saver",3=>"balanced",4=>"high",_=>string.Empty};if(mode.Length>0)_=RunModeWithContextAsync(mode,new SwitchRequestContext("tray",AllowPreview:false));else if(command==10)ShowFromTray();else if(command==11)Close();
     }
 
-    internal string GetActivePlanGuidFast()
-    {
-        try{using var p=Process.Start(new ProcessStartInfo("powercfg.exe","/getactivescheme"){UseShellExecute=false,RedirectStandardOutput=true,CreateNoWindow=true});if(p is null)return string.Empty;var output=p.StandardOutput.ReadToEnd();p.WaitForExit();return Regex.Match(output,"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}").Value.ToLowerInvariant();}catch{return string.Empty;}
-    }
-    internal async Task RestorePlanAsync(string guid){if(guid.Length>0)await RunPowerCfgAsync("/setactive",guid);}
-    private async Task<bool> RunPowerCfgAsync(params string[] args)
-    {
-        try{Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);var oem=Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage);var psi=new ProcessStartInfo("powercfg.exe"){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true,CreateNoWindow=true,StandardOutputEncoding=oem,StandardErrorEncoding=oem};foreach(var arg in args)psi.ArgumentList.Add(arg);using var p=Process.Start(psi);if(p is null)return false;var output=p.StandardOutput.ReadToEndAsync();var error=p.StandardError.ReadToEndAsync();await p.WaitForExitAsync();var o=await output;var e=await error;if(o.Length>0)AppendLog(o);if(e.Length>0)AppendLog(e);return p.ExitCode==0;}catch(Exception ex){AppendLog(ex.Message);return false;}
-    }
-
     internal async Task ApplyCustomProfileAsync(CustomPowerProfile profile)
     {
         if (!CanPersistSettings)
@@ -221,33 +249,70 @@ public sealed partial class MainWindow
             ShowCorruptSettingsWarning();
             return;
         }
-        if(_busy||_modeSwitchInProgress)return;
-        var previous=GetActivePlanGuidFast();var previousMode=_featureSettings.LastMode;var stopwatch=Stopwatch.StartNew();var succeeded=false;string? error=null;
-        _busy=true;_customProfileInProgress=true;SetControlsEnabled(false);StatusText.Text=IsChinese?$"正在应用：{profile.Name}":$"Applying: {profile.Name}";
-        try
+        if(_modeSwitchInProgress)return;
+        if (await RunTargetCoreAsync(
+            PowerModeTarget.ForCustom(CustomPowerProfileSnapshot.FromSettings(profile)),
+            cpuMaximumPercent: null,
+            disableWifi: false,
+            new SwitchRequestContext(
+                "custom-profile",
+                profile.Name,
+                AllowPreview: false),
+            profile))
         {
-            var dcCpu=profile.UseSeparateBatteryValues?profile.BatteryCpuMax:profile.CpuMax;var dcBrightness=profile.UseSeparateBatteryValues?profile.BatteryBrightness:profile.Brightness;var dcDisplay=profile.UseSeparateBatteryValues?profile.BatteryDisplayOffSeconds:profile.DisplayOffSeconds;
-            var list=new List<string[]>{new[]{"/setactive",SaverGuid},new[]{"/setacvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMAX",profile.CpuMax.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMAX",dcCpu.ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMIN",profile.CpuMin.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMIN",Math.Min(profile.CpuMin,dcCpu).ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_PROCESSOR","PERFBOOSTMODE",profile.DisableBoost?"0":"2"},new[]{"/setdcvalueindex",SaverGuid,"SUB_PROCESSOR","PERFBOOSTMODE",profile.DisableBoost?"0":"2"},new[]{"/setacvalueindex",SaverGuid,"SUB_VIDEO","VIDEONORMALLEVEL",profile.Brightness.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_VIDEO","VIDEONORMALLEVEL",dcBrightness.ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_VIDEO","VIDEOIDLE",profile.DisplayOffSeconds.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_VIDEO","VIDEOIDLE",dcDisplay.ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_SLEEP","STANDBYIDLE","0"},new[]{"/setdcvalueindex",SaverGuid,"SUB_SLEEP","STANDBYIDLE","0"},new[]{"/setactive",SaverGuid}};
-            foreach(var command in list)if(!await RunPowerCfgAsync(command)){error=IsChinese?"预设命令失败":"Profile command failed";await RestorePlanAsync(previous);StatusText.Text=IsChinese?"预设应用失败，已回滚":"Profile failed; rolled back";StatusBar.Severity=InfoBarSeverity.Error;return;}
-            _lastCustomProfile=profile;_featureSettings.LastMode="saver";TrySaveSettings(_featureSettings);
-            ModeValue.Text=profile.Name;CpuValue.Text=$"{profile.CpuMax}%";BrightnessValue.Text=$"{profile.Brightness}%";SleepValue.Text=CustomProfileSleepDisplay.Format(profile.DisplayOffSeconds);UpdateActiveMode(string.Empty);StatusText.Text=IsChinese?$"已应用：{profile.Name}":$"Applied: {profile.Name}";StatusBar.Severity=InfoBarSeverity.Success;succeeded=true;
-        }
-        catch(Exception ex)
-        {
-            error=ex.Message;AppendLog(ex.ToString());await RestorePlanAsync(previous);StatusText.Text=IsChinese?"预设应用失败，已回滚":"Profile failed; rolled back";StatusBar.Severity=InfoBarSeverity.Error;
-        }
-        finally
-        {
-            stopwatch.Stop();
-            if(_featureSettings.OperationHistoryEnabled)await RecordSwitchHistoryAsync(new SwitchHistoryEntry{Timestamp=DateTimeOffset.Now,PreviousMode=previousMode,TargetMode=$"profile:{profile.Name}",Trigger="custom-profile",Reason=profile.Name,Succeeded=succeeded,DurationMilliseconds=stopwatch.ElapsedMilliseconds,ErrorMessage=error});
-            _customProfileInProgress=false;_busy=false;SetControlsEnabled(true);
+            SleepValue.Text = CustomProfileSleepDisplay.Format(profile.DisplayOffSeconds);
         }
     }
-    internal async Task VerifyWithSummaryAsync(){var result=await RunCliAsync("verify");if(result.ExitCode!=0)return;var ok=Regex.Matches(result.Output,@"\[OK\]").Count;var bad=Regex.Matches(result.Output,@"\[!!?\]").Count;StatusText.Text=IsChinese?$"校验：{ok} 项正常，{bad} 项需修复":$"Verification: {ok} passed, {bad} need repair";StatusBar.Severity=bad==0?InfoBarSeverity.Success:InfoBarSeverity.Warning;}
-    private async void RepairButton_Click(object sender,RoutedEventArgs e){var text=ModeValue.Text.ToLowerInvariant();if(_lastCustomProfile is not null&&text==_lastCustomProfile.Name.ToLowerInvariant()){await ApplyCustomProfileAsync(_lastCustomProfile);return;}var mode=text.Contains("remote")||text.Contains("远程")?"remote":text.Contains("saver")||text.Contains("低功耗")?"saver":text.Contains("high")||text.Contains("高性能")?"high":"balanced";await RunModeAsync(mode);}
+    internal async Task VerifyWithSummaryAsync()
+    {
+        var availability = await GetRecoveryService().GetLastOperationAvailabilityAsync();
+        if (availability.Record is { } record)
+        {
+            var result = await GetRecoveryService().VerifyLastOperationAsync(record.OperationId);
+            if (result.CurrentState is { } currentState)
+                ApplyPowerModeState(currentState);
+            StatusText.Text = result.Error ?? (result.MatchesCriticalExpectations
+                ? (IsChinese ? "最近电源操作已验证。" : "The last power operation is verified.")
+                : (IsChinese ? "当前状态与关键预期不匹配。" : "Current state does not match critical expectations."));
+            StatusBar.Severity = result.MatchesCriticalExpectations
+                ? InfoBarSeverity.Success
+                : InfoBarSeverity.Warning;
+            if (result.MatchesCriticalExpectations)
+                await ResumeStartupAfterRecoveryAsync();
+            return;
+        }
+
+        var current = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
+        AppendBackendDiagnostics(current.Operation);
+        if (current.State is { } state)
+            ApplyPowerModeState(state);
+        StatusText.Text = current.State is null
+            ? (IsChinese ? "无法可靠验证当前状态。" : "The current state could not be verified reliably.")
+            : (IsChinese ? "当前电源状态可读取且契约有效。" : "The current power state is readable and contract-valid.");
+        StatusBar.Severity = current.State is null
+            ? InfoBarSeverity.Error
+            : InfoBarSeverity.Success;
+    }
+    private async void RepairButton_Click(object sender,RoutedEventArgs e)
+    {
+        if (_lastCustomProfile is not null && _activeModeKey.StartsWith("custom:", StringComparison.OrdinalIgnoreCase))
+        {
+            await ApplyCustomProfileAsync(_lastCustomProfile);
+            return;
+        }
+        await RunModeAsync(_activeModeKey is "remote" or "saver" or "balanced" or "high"
+            ? _activeModeKey
+            : "balanced");
+    }
     private async void WifiOnButton_Click(object sender,RoutedEventArgs e)
     {
-        try{var command="Get-NetAdapter | Where-Object { $_.Name -like '*Wi*' -or $_.InterfaceDescription -match 'Wireless|Wi-Fi|WLAN' } | Enable-NetAdapter -Confirm:$false";using var p=Process.Start(new ProcessStartInfo("powershell.exe") {UseShellExecute=true,Verb="runas",Arguments=$"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",WindowStyle=ProcessWindowStyle.Hidden});if(p is null)return;await p.WaitForExitAsync();StatusText.Text=p.ExitCode==0?(IsChinese?"WiFi 已恢复":"WiFi restored"):(IsChinese?"WiFi 恢复失败":"WiFi restore failed");StatusBar.Severity=p.ExitCode==0?InfoBarSeverity.Success:InfoBarSeverity.Error;}catch(Win32Exception){StatusText.Text=IsChinese?"已取消管理员授权":"Administrator request cancelled";}
+        const string command = "Get-NetAdapter | Where-Object { $_.Name -like '*Wi*' -or $_.InterfaceDescription -match 'Wireless|Wi-Fi|WLAN' } | Enable-NetAdapter -Confirm:$false";
+        var result = await _processRunner.RunAsync(new ProcessExecutionRequest(
+            "powershell.exe",
+            ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            TimeSpan.FromSeconds(10)));
+        AppendProcessDiagnostics("wifi-enable", result);
+        StatusText.Text=result.Succeeded?(IsChinese?"WiFi 已恢复":"WiFi restored"):(IsChinese?"WiFi 恢复失败":"WiFi restore failed");StatusBar.Severity=result.Succeeded?InfoBarSeverity.Success:InfoBarSeverity.Error;
     }
     private void FeaturesButton_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();OpenRecoveryCenterButton_Click(sender,e);return;}if(_settingsWindow is not null){_settingsWindow.Activate();return;}_settingsWindow=new SettingsWindow(this,_featureSettings,IsChinese);_settingsWindow.Closed+=(_,_)=>_settingsWindow=null;_settingsWindow.Activate();}
     private void AutoQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.AutoSwitchEnabled=AutoQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"自动切换已{(_featureSettings.AutoSwitchEnabled?"开启":"关闭")}"):($"Automatic switching {(_featureSettings.AutoSwitchEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
@@ -255,7 +320,7 @@ public sealed partial class MainWindow
 
     private async void RootGrid_KeyDown(object sender,KeyRoutedEventArgs e)
     {
-        if(e.Key==VirtualKey.F5){e.Handled=true;if(!_busy)await RefreshStatusAsync();return;}var focused=FocusManager.GetFocusedElement(RootGrid.XamlRoot);if(focused is TextBox or NumberBox)return;var mode=e.Key switch{VirtualKey.Number1 or VirtualKey.NumberPad1=>"remote",VirtualKey.Number2 or VirtualKey.NumberPad2=>"saver",VirtualKey.Number3 or VirtualKey.NumberPad3=>"balanced",VirtualKey.Number4 or VirtualKey.NumberPad4=>"high",_=>string.Empty};if(mode.Length>0){e.Handled=true;await RunModeAsync(mode);}
+        if(e.Key==VirtualKey.F5){e.Handled=true;await RefreshStatusAsync();return;}var focused=FocusManager.GetFocusedElement(RootGrid.XamlRoot);if(focused is TextBox or NumberBox)return;var mode=e.Key switch{VirtualKey.Number1 or VirtualKey.NumberPad1=>"remote",VirtualKey.Number2 or VirtualKey.NumberPad2=>"saver",VirtualKey.Number3 or VirtualKey.NumberPad3=>"balanced",VirtualKey.Number4 or VirtualKey.NumberPad4=>"high",_=>string.Empty};if(mode.Length>0){e.Handled=true;await RunModeAsync(mode);}
     }
 
     private async Task DetectCapabilitiesAndRefreshPresentationAsync()

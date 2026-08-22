@@ -5,6 +5,64 @@ namespace PowerModeWinUI.Tests;
 public sealed class ModeSwitchResultPresentationTests
 {
     [Fact]
+    public void CustomPowerProfileSnapshot_FromSettingsMapsEveryFieldWithoutRetainingSettingsModel()
+    {
+        var settings = new CustomPowerProfile
+        {
+            Name = "Quiet",
+            CpuMax = 47,
+            BatteryCpuMax = 33,
+            CpuMin = 7,
+            Brightness = 71,
+            BatteryBrightness = 42,
+            DisplayOffSeconds = 420,
+            BatteryDisplayOffSeconds = 150,
+            DisableBoost = true,
+            UseSeparateBatteryValues = true
+        };
+
+        var snapshot = CustomPowerProfileSnapshot.FromSettings(settings);
+
+        Assert.Equal("Quiet", snapshot.Name);
+        Assert.Equal(47, snapshot.CpuMaximumAcPercent);
+        Assert.Equal(33, snapshot.CpuMaximumDcPercent);
+        Assert.Equal(7, snapshot.CpuMinimumPercent);
+        Assert.Equal(71, snapshot.BrightnessAcPercent);
+        Assert.Equal(42, snapshot.BrightnessDcPercent);
+        Assert.Equal(420, snapshot.DisplayTimeoutAcSeconds);
+        Assert.Equal(150, snapshot.DisplayTimeoutDcSeconds);
+        Assert.True(snapshot.DisableBoost);
+
+        settings.Name = "Mutated";
+        settings.CpuMax = 99;
+        Assert.Equal("Quiet", snapshot.Name);
+        Assert.Equal(47, snapshot.CpuMaximumAcPercent);
+    }
+
+    [Fact]
+    public void CustomPowerProfileSnapshot_SharedBatteryValuesCopyEveryAcField()
+    {
+        var snapshot = CustomPowerProfileSnapshot.FromSettings(new CustomPowerProfile
+        {
+            Name = "Shared",
+            CpuMax = 44,
+            CpuMin = 6,
+            Brightness = 64,
+            DisplayOffSeconds = 240,
+            DisableBoost = false,
+            UseSeparateBatteryValues = false,
+            BatteryCpuMax = 21,
+            BatteryBrightness = 22,
+            BatteryDisplayOffSeconds = 23
+        });
+
+        Assert.Equal(snapshot.CpuMaximumAcPercent, snapshot.CpuMaximumDcPercent);
+        Assert.Equal(snapshot.BrightnessAcPercent, snapshot.BrightnessDcPercent);
+        Assert.Equal(snapshot.DisplayTimeoutAcSeconds, snapshot.DisplayTimeoutDcSeconds);
+        Assert.False(snapshot.DisableBoost);
+    }
+
+    [Fact]
     public void PartialResult_ShowsWarningAndReviewAction()
     {
         var state = ModeSwitchResultPresentationPolicy.Create(
