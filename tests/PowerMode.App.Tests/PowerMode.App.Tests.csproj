@@ -16,5 +16,18 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\PowerMode.App\PowerMode.App.csproj" />
+    <ProjectReference Include="..\PowerMode.TestHost\PowerMode.TestHost.csproj" />
   </ItemGroup>
+  <Target Name="CopyTestHostRuntime" AfterTargets="Build">
+    <ItemGroup>
+      <TestHostRuntimeFiles Include="..\PowerMode.TestHost\bin\$(Configuration)\net10.0\PowerMode.TestHost.exe" />
+      <TestHostRuntimeFiles Include="..\PowerMode.TestHost\bin\$(Configuration)\net10.0\PowerMode.TestHost.dll" />
+      <TestHostRuntimeFiles Include="..\PowerMode.TestHost\bin\$(Configuration)\net10.0\PowerMode.TestHost.deps.json" />
+      <TestHostRuntimeFiles Include="..\PowerMode.TestHost\bin\$(Configuration)\net10.0\PowerMode.TestHost.runtimeconfig.json" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(TestHostRuntimeFiles)"
+      DestinationFolder="$(OutDir)"
+      SkipUnchangedFiles="true" />
+  </Target>
 </Project>
