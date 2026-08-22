@@ -20,6 +20,7 @@ public sealed partial class MainWindow
     private RecoveryService? _recoveryService;
     private readonly CancellationTokenSource _recoveryLifetimeCancellation = new();
     private long _modeSwitchGeneration;
+    private string? _pendingMode;
     private bool _modeSwitchInProgress;
     private bool _advancedFeaturesInitialized;
     private bool _temperatureProtectionActive;
@@ -451,6 +452,7 @@ public sealed partial class MainWindow
 
         var targetMode = NormalizeMode(args[0], args[0]);
         args[0] = targetMode;
+        _pendingMode = targetMode;
         if (context.AllowPreview &&
             string.Equals(context.Trigger, "manual", StringComparison.OrdinalIgnoreCase) &&
             _featureSettings.PreviewManualSwitches)
@@ -585,6 +587,7 @@ public sealed partial class MainWindow
 
             if (generation == Volatile.Read(ref _modeSwitchGeneration))
             {
+                _pendingMode = null;
                 _modeSwitchInProgress = false;
                 Interlocked.CompareExchange(ref _modeSwitchCancellation, null, cancellation);
                 BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;

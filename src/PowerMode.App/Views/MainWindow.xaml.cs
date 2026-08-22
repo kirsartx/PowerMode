@@ -90,9 +90,14 @@ public sealed partial class MainWindow : Window
 
     private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var compact=e.NewSize.Width<1040;
-        RootGrid.Padding=compact?new Thickness(20,18,20,18):new Thickness(28,22,28,22);
-        var visibility=compact?Visibility.Collapsed:Visibility.Visible;
+        var layout=ResponsiveLayoutPolicy.Evaluate(e.NewSize.Width,_featureSettings.ExperienceMode);
+        RootGrid.Padding=layout.Tier switch
+        {
+            LayoutTier.Narrow=>new Thickness(16,14,16,14),
+            LayoutTier.Medium=>new Thickness(20,18,20,18),
+            _=>new Thickness(28,22,28,22)
+        };
+        var visibility=layout.Tier==LayoutTier.Narrow?Visibility.Collapsed:Visibility.Visible;
         AutoQuickText.Visibility=visibility;LiveQuickText.Visibility=visibility;RefreshButtonText.Visibility=visibility;
         FeaturesButtonText.Visibility=visibility;InsightsButtonText.Visibility=visibility;RecoveryCenterButtonText.Visibility=visibility;
     }
@@ -341,11 +346,22 @@ public sealed partial class MainWindow : Window
     }
     private void UpdateActiveMode(string text)
     {
-        var value=text.ToLowerInvariant();Button? active=value.Contains("remote")||value.Contains("远程")?RemoteButton:value.Contains("saver")||value.Contains("低功耗")?SaverButton:value.Contains("balanced")||value.Contains("平衡")?BalancedButton:value.Contains("high")||value.Contains("高性能")?HighButton:null;
-        foreach(var button in new[]{RemoteButton,SaverButton,BalancedButton,HighButton})
+        var value=text.ToLowerInvariant();
+        var activeMode=value.Contains("remote")||value.Contains("远程")?"remote":value.Contains("saver")||value.Contains("低功耗")?"saver":value.Contains("balanced")||value.Contains("平衡")?"balanced":value.Contains("high")||value.Contains("高性能")?"high":"unknown";
+        var buttons=new[]
         {
-            var isActive=button==active;
-            AutomationProperties.SetItemStatus(button,isActive?(_language=="zh"?"当前模式":"Current mode"):string.Empty);
+            (Mode:"remote",Button:RemoteButton,Name:T("ModeRemote")),
+            (Mode:"saver",Button:SaverButton,Name:T("ModeSaver")),
+            (Mode:"balanced",Button:BalancedButton,Name:T("ModeBalanced")),
+            (Mode:"high",Button:HighButton,Name:T("ModeHigh"))
+        };
+        foreach(var item in buttons)
+        {
+            var state=ModeButtonPresentation.Evaluate(item.Mode,activeMode,_pendingMode,_modeSwitchInProgress,item.Name,IsChinese);
+            var button=item.Button;
+            AutomationProperties.SetItemStatus(button,state.ItemStatus);
+            AutomationProperties.SetName(button,state.AutomationName);
+            var isActive=state.ShowCheckmark;
             if(isActive)
             {
                 button.Background=(Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
