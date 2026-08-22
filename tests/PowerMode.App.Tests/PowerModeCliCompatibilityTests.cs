@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text;
 using Xunit;
 
@@ -5,6 +6,14 @@ namespace PowerModeWinUI.Tests;
 
 public sealed class PowerModeCliCompatibilityTests
 {
+    private static class KnownPowerSettings
+    {
+        public const string CpuMaximum =
+            "bc5038f7-23e0-4960-96da-33abaf5935ec";
+        public const string Brightness =
+            "aded5e82-b909-4619-9949-f5d71dac0bcb";
+    }
+
     [Fact]
     public void BatLauncher_IsThinAndUsesSiblingEngine()
     {
@@ -55,6 +64,167 @@ public sealed class PowerModeCliCompatibilityTests
         Assert.NotEmpty(result.StandardOutput.Trim());
     }
 
+    [Fact]
+    public async Task Engine_JsonStatus_WritesExactlyOneDocument()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "status",
+            "-OutputFormat", "Json",
+            "-OperationId", "22222222-2222-2222-2222-222222222222");
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.StandardOutput);
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("status", document.RootElement.GetProperty("action").GetString());
+        Assert.Equal(
+            string.Empty,
+            result.StandardOutput[
+                (result.StandardOutput.LastIndexOf('}') + 1)..].Trim());
+    }
+
+    [Fact]
+    public async Task Engine_JsonApply_ContainsBeforeAfterStepsAndExpectations()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "remote",
+            "-OutputFormat", "Json");
+
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(BackendOperationOutcome.Succeeded, contract.Outcome);
+        Assert.NotNull(contract.BeforeState);
+        Assert.NotNull(contract.AfterState);
+        Assert.NotEmpty(contract.Steps);
+        Assert.Contains(
+            contract.Expectations,
+            expectation =>
+                expectation.Field == PowerModeStateField.CpuMaximumAcPercent &&
+                expectation.Critical);
+    }
+
+    [Fact]
+    public async Task Engine_OptionalBrightnessFailure_ProducesPartial()
+    {
+        using var state = FakePowerState.CreateBalanced(
+            failSetting: KnownPowerSettings.Brightness);
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "remote",
+            "-OutputFormat", "Json");
+
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(BackendOperationOutcome.Partial, contract.Outcome);
+        Assert.Contains(
+            contract.Steps,
+            step => !step.Critical && step.ExitCode != 0);
+    }
+
+    [Fact]
+    public async Task Engine_CriticalCpuFailure_ProducesFailed()
+    {
+        using var state = FakePowerState.CreateBalanced(
+            failSetting: KnownPowerSettings.CpuMaximum);
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "remote",
+            "-OutputFormat", "Json");
+
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(BackendOperationOutcome.Failed, contract.Outcome);
+        Assert.Contains(
+            contract.Steps,
+            step => step.Critical && step.ExitCode != 0);
+    }
+
+    [Fact]
+    public async Task Engine_JsonCustomProfile_VerifiesOnlyCustomFields()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var profile = Encode("""
+            {
+              "name": "Quiet",
+              "cpuMax": 45,
+              "cpuMin": 5,
+              "brightness": 65,
+              "displayOffSeconds": 300,
+              "disableBoost": true,
+              "useSeparateBatteryValues": false
+            }
+            """);
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "custom",
+            "-OutputFormat", "Json",
+            "-CustomProfileBase64", profile);
+
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        Assert.Equal(BackendOperationOutcome.Succeeded, contract.Outcome);
+        Assert.Equal("custom:Quiet", contract.RequestedTargetKey);
+        Assert.DoesNotContain(
+            contract.Expectations,
+            expectation => expectation.Field is
+                PowerModeStateField.SleepTimeoutAcSeconds or
+                PowerModeStateField.SleepTimeoutDcSeconds or
+                PowerModeStateField.HibernateTimeoutAcSeconds or
+                PowerModeStateField.HibernateTimeoutDcSeconds);
+        Assert.Contains(
+            contract.Expectations,
+            expectation => expectation.Field == PowerModeStateField.DisplayTimeoutAcSeconds);
+    }
+
+    [Fact]
+    public async Task Engine_RestoreSnapshot_RestoresActiveSchemeAndMutableFields()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var snapshot = Encode("""
+            {
+              "activeSchemeId": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+              "cpuMaximumAcPercent": 77,
+              "cpuMaximumDcPercent": 76,
+              "brightnessAcPercent": 61,
+              "brightnessDcPercent": 60,
+              "displayTimeoutAcSeconds": 321,
+              "displayTimeoutDcSeconds": 322,
+              "sleepTimeoutAcSeconds": 11,
+              "sleepTimeoutDcSeconds": 12,
+              "hibernateTimeoutAcSeconds": 13,
+              "hibernateTimeoutDcSeconds": 14
+            }
+            """);
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "restore",
+            "-OutputFormat", "Json",
+            "-RestoreSnapshotBase64", snapshot);
+
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        var saved = JsonDocument.Parse(File.ReadAllText(state.Path));
+        Assert.Equal(BackendOperationOutcome.Succeeded, contract.Outcome);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(
+            "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+            saved.RootElement.GetProperty("activeSchemeId").GetString());
+        Assert.Contains("77", saved.RootElement.ToString());
+        Assert.Contains("321", saved.RootElement.ToString());
+    }
+
+    [Fact]
+    public async Task Engine_TextMode_DoesNotEmitJson()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var result = await RunEngineAsync(state, "-Mode", "status");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotEmpty(result.StandardOutput.Trim());
+        Assert.DoesNotContain("\"schemaVersion\"", result.StandardOutput);
+    }
+
     private static Task<ProcessExecutionResult> RunBatAsync(
         params string[] arguments)
     {
@@ -69,5 +239,61 @@ public sealed class PowerModeCliCompatibilityTests
             {
                 ["PM_NO_PAUSE"] = "1"
             }));
+    }
+
+    private static Task<ProcessExecutionResult> RunEngineAsync(
+        FakePowerState state,
+        params string[] arguments)
+    {
+        var request = new ProcessExecutionRequest(
+            "powershell.exe",
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                TestPaths.Repo("src", "PowerMode.Cli", "PowerMode.Engine.ps1"),
+                .. arguments
+            ],
+            TimeSpan.FromSeconds(15),
+            Environment: new Dictionary<string, string?>
+            {
+                ["POWERMODE_POWERCFG_PATH"] = TestPaths.TestHostExe,
+                ["POWERMODE_TEST_POWER_STATE"] = state.Path,
+                ["POWERMODE_TEST_FAIL_SETTING"] = state.FailSetting
+            });
+        return new ProcessRunner().RunAsync(request);
+    }
+
+    private static string Encode(string json) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+
+    private sealed class FakePowerState : IDisposable
+    {
+        private readonly TemporaryDirectory _directory = new();
+
+        public string Path { get; }
+        public string? FailSetting { get; }
+
+        private FakePowerState(string? failSetting)
+        {
+            Path = System.IO.Path.Combine(_directory.Path, "state.json");
+            FailSetting = failSetting;
+            File.WriteAllText(
+                Path,
+                """
+                {
+                  "activeSchemeId": "381b4222-f694-41f0-9685-ff5bb260df2e",
+                  "values": {}
+                }
+                """);
+        }
+
+        public static FakePowerState CreateBalanced(
+            string? failSetting = null) =>
+            new(failSetting);
+
+        public void Dispose() => _directory.Dispose();
     }
 }

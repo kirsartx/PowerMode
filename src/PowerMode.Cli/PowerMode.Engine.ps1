@@ -5,6 +5,19 @@ param(
     [Parameter(Position = 0)]
     [string]$Mode,
 
+    [ValidateSet('Text', 'Json')]
+    [string]$OutputFormat = 'Text',
+
+    [Guid]$OperationId = [Guid]::NewGuid(),
+
+    [Nullable[int]]$CpuMaximumPercent,
+
+    [switch]$DisableWifi,
+
+    [string]$CustomProfileBase64,
+
+    [string]$RestoreSnapshotBase64,
+
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
     [string[]]$Options = @()
 )
@@ -32,6 +45,8 @@ $ConfigRegPath         = 'HKCU:\Software\PowerModeSwitcher'
 
 $script:AdminWarningShown = $false
 $script:Language = 'en'
+$script:JsonMode = $OutputFormat -eq 'Json'
+$script:JsonResult = $null
 
 function Get-Text {
     param([string]$Key)
@@ -299,39 +314,75 @@ function Format-CommandArgument {
 
 function Invoke-PowerCfg {
     param(
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [string]$StepName = 'powercfg',
+        [bool]$Critical = $true
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = 'powercfg.exe'
+    $powerCfgPath = $env:POWERMODE_POWERCFG_PATH
+    $startInfo.FileName = if ([string]::IsNullOrWhiteSpace($powerCfgPath)) {
+        'powercfg.exe'
+    } else {
+        $powerCfgPath
+    }
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.CreateNoWindow = $true
     $startInfo.Arguments = (($Arguments | ForEach-Object { Format-CommandArgument $_ }) -join ' ')
 
-    $process = [System.Diagnostics.Process]::Start($startInfo)
-    $stdout = $process.StandardOutput.ReadToEnd().Trim()
-    $stderr = $process.StandardError.ReadToEnd().Trim()
-    $process.WaitForExit()
+    $stdout = ''
+    $stderr = ''
+    $exitCode = $null
+    $startError = $null
+    try {
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        if ($null -eq $process) {
+            throw 'powercfg process could not be started.'
+        }
+        try {
+            $stdout = $process.StandardOutput.ReadToEnd().Trim()
+            $stderr = $process.StandardError.ReadToEnd().Trim()
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
+        } finally {
+            $process.Dispose()
+        }
+    } catch {
+        $startError = $_.Exception.Message
+    }
 
-    if ($process.ExitCode -ne 0) {
-        $message = (@($stderr, $stdout) | Where-Object { $_ }) -join ' '
+    $message = (@($startError, $stderr, $stdout) | Where-Object { $_ }) -join ' '
+    $succeeded = $null -eq $startError -and $exitCode -eq 0
+    if ($script:JsonMode -and $null -ne $script:JsonResult) {
+        [void]$script:JsonResult.steps.Add([ordered]@{
+            name = $StepName
+            critical = $Critical
+            exitCode = $exitCode
+            timedOut = $false
+            error = if ($succeeded) { $null } else { $message }
+        })
+    } elseif (-not $succeeded) {
         if ($message) {
             Write-Host "  powercfg $($Arguments -join ' ') failed: $message" -ForegroundColor DarkGray
         } else {
             Write-Host "  powercfg $($Arguments -join ' ') failed." -ForegroundColor DarkGray
         }
-        return $false
     }
 
-    return $true
+    return [pscustomobject]@{
+        Succeeded = $succeeded
+        ExitCode = $exitCode
+        StandardOutput = $stdout
+        StandardError = $stderr
+        Error = $message
+    }
 }
 
 function Set-ActivePlan {
     param([string]$Guid)
-    [void](Invoke-PowerCfg /setactive $Guid)
+    $null = Invoke-PowerCfg -Arguments @('/setactive', $Guid) -StepName 'set-active-plan' -Critical $true
 }
 
 function Set-PowerValue {
@@ -339,9 +390,11 @@ function Set-PowerValue {
         [string]$Guid,
         [string]$Subgroup,
         [string]$Setting,
-        [object]$Value
+        [object]$Value,
+        [string]$StepName = 'set-ac-value',
+        [bool]$Critical = $true
     )
-    [void](Invoke-PowerCfg /setacvalueindex $Guid $Subgroup $Setting ([string]$Value))
+    $null = Invoke-PowerCfg -Arguments @('/setacvalueindex', $Guid, $Subgroup, $Setting, ([string]$Value)) -StepName $StepName -Critical $Critical
 }
 
 function Set-PowerValueDc {
@@ -349,9 +402,11 @@ function Set-PowerValueDc {
         [string]$Guid,
         [string]$Subgroup,
         [string]$Setting,
-        [object]$Value
+        [object]$Value,
+        [string]$StepName = 'set-dc-value',
+        [bool]$Critical = $true
     )
-    [void](Invoke-PowerCfg /setdcvalueindex $Guid $Subgroup $Setting ([string]$Value))
+    $null = Invoke-PowerCfg -Arguments @('/setdcvalueindex', $Guid, $Subgroup, $Setting, ([string]$Value)) -StepName $StepName -Critical $Critical
 }
 
 function Set-PowerValueAcDc {
@@ -359,16 +414,18 @@ function Set-PowerValueAcDc {
         [string]$Guid,
         [string]$Subgroup,
         [string]$Setting,
-        [object]$Value
+        [object]$Value,
+        [string]$StepName = 'set-power-value',
+        [bool]$Critical = $true
     )
 
-    Set-PowerValue $Guid $Subgroup $Setting $Value
-    Set-PowerValueDc $Guid $Subgroup $Setting $Value
+    Set-PowerValue $Guid $Subgroup $Setting $Value $StepName $Critical
+    Set-PowerValueDc $Guid $Subgroup $Setting $Value $StepName $Critical
 }
 
 function Get-ActiveSchemeGuid {
-    $raw = powercfg /getactivescheme 2>$null
-    $rawText = ($raw | Out-String).Trim()
+    $result = Invoke-PowerCfg -Arguments @('/getactivescheme') -StepName 'read-active-scheme' -Critical $true
+    $rawText = $result.StandardOutput.Trim()
 
     if ($rawText -match '(?i)GUID:\s+([0-9a-f-]+)') {
         return $Matches[1].ToLowerInvariant()
@@ -381,11 +438,13 @@ function Get-PowerSettingAcValue {
     param(
         [string]$Guid,
         [string]$Subgroup,
-        [string]$Setting
+        [string]$Setting,
+        [string]$StepName = 'read-ac-value',
+        [bool]$Critical = $true
     )
 
-    $raw = powercfg /query $Guid $Subgroup $Setting 2>$null
-    $rawText = ($raw | Out-String)
+    $result = Invoke-PowerCfg -Arguments @('/query', $Guid, $Subgroup, $Setting) -StepName $StepName -Critical $Critical
+    $rawText = $result.StandardOutput
 
     if ($rawText -match '当前交流电源设置索引:\s+0x([0-9a-fA-F]+)') {
         return [Convert]::ToInt32($Matches[1], 16)
@@ -407,11 +466,13 @@ function Get-PowerSettingDcValue {
     param(
         [string]$Guid,
         [string]$Subgroup,
-        [string]$Setting
+        [string]$Setting,
+        [string]$StepName = 'read-dc-value',
+        [bool]$Critical = $true
     )
 
-    $raw = powercfg /query $Guid $Subgroup $Setting 2>$null
-    $rawText = ($raw | Out-String)
+    $result = Invoke-PowerCfg -Arguments @('/query', $Guid, $Subgroup, $Setting) -StepName $StepName -Critical $Critical
+    $rawText = $result.StandardOutput
 
     if ($rawText -match '当前直流电源设置索引:\s+0x([0-9a-fA-F]+)') {
         return [Convert]::ToInt32($Matches[1], 16)
@@ -998,7 +1059,398 @@ function Show-Menu {
     }
 }
 
+$JsonCpuSubgroup = '54533251-82be-4824-96c1-47b60b740d00'
+$JsonVideoSubgroup = '7516b95f-f776-4464-8c53-06167f40cc99'
+$JsonSleepSubgroup = '238c9fa8-0aad-41ed-83f4-97be242c8f20'
+$JsonCpuMaximum = 'bc5038f7-23e0-4960-96da-33abaf5935ec'
+$JsonCpuMinimum = '893dee8e-2bef-41e0-89c6-b55d0929964c'
+$JsonBoostMode = 'be337238-0d82-4146-a960-4f3749d470c7'
+$JsonBrightness = 'aded5e82-b909-4619-9949-f5d71dac0bcb'
+$JsonDisplayTimeout = '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e'
+$JsonSleepTimeout = '29f6c1db-86da-48c5-9fdb-f2b67b1f44da'
+$JsonHibernateTimeout = '9d7815a6-7ee4-497e-8888-515a05f02364'
+
+function New-JsonResult {
+    param([string]$Action)
+
+    return [ordered]@{
+        schemaVersion = 1
+        operationId = $OperationId.ToString()
+        action = $Action
+        requestedMode = $null
+        startedAtUtc = $script:JsonStartedAtUtc.ToString('O')
+        durationMs = 0
+        outcome = 'succeeded'
+        steps = [System.Collections.ArrayList]::new()
+        beforeState = $null
+        afterState = $null
+        expectations = [System.Collections.ArrayList]::new()
+    }
+}
+
+function Get-JsonPowerSource {
+    try {
+        $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop | Select-Object -First 1
+        if (-not $battery) { return 'ac' }
+        switch ([int]$battery.BatteryStatus) {
+            1 { return 'battery' }
+            2 { return 'charging' }
+            3 { return 'full' }
+            6 { return 'charging' }
+            7 { return 'charging' }
+            8 { return 'charging' }
+            9 { return 'charging' }
+            11 { return 'ac' }
+            default { return 'unknown' }
+        }
+    } catch {
+        return 'unknown'
+    }
+}
+
+function Get-JsonDetectedMode {
+    param([string]$Guid)
+
+    switch ($Guid) {
+        $GUID_SAVER {
+            $cpu = Get-PowerSettingAcValue $Guid $JsonCpuSubgroup $JsonCpuMaximum
+            if ($null -ne $cpu -and $cpu -le 30) { return 'saver' }
+            return 'remote'
+        }
+        $GUID_BAL { return 'balanced' }
+        $GUID_HIGH { return 'high' }
+        default { return $null }
+    }
+}
+
+function Get-JsonPowerModeState {
+    $guid = Get-ActiveSchemeGuid
+    if ([string]::IsNullOrWhiteSpace($guid)) { $guid = $null }
+
+    $cpuMaximumAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonCpuSubgroup $JsonCpuMaximum } else { $null }
+    $cpuMaximumDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonCpuSubgroup $JsonCpuMaximum } else { $null }
+    $cpuMinimumAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonCpuSubgroup $JsonCpuMinimum } else { $null }
+    $cpuMinimumDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonCpuSubgroup $JsonCpuMinimum } else { $null }
+    $boostAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonCpuSubgroup $JsonBoostMode } else { $null }
+    $boostDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonCpuSubgroup $JsonBoostMode } else { $null }
+    $brightnessAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonVideoSubgroup $JsonBrightness 'read-brightness-ac' $false } else { $null }
+    $brightnessDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonVideoSubgroup $JsonBrightness 'read-brightness-dc' $false } else { $null }
+    $displayAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonVideoSubgroup $JsonDisplayTimeout } else { $null }
+    $displayDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonVideoSubgroup $JsonDisplayTimeout } else { $null }
+    $sleepAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonSleepSubgroup $JsonSleepTimeout } else { $null }
+    $sleepDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonSleepSubgroup $JsonSleepTimeout } else { $null }
+    $hibernateAc = if ($guid) { Get-PowerSettingAcValue $guid $JsonSleepSubgroup $JsonHibernateTimeout } else { $null }
+    $hibernateDc = if ($guid) { Get-PowerSettingDcValue $guid $JsonSleepSubgroup $JsonHibernateTimeout } else { $null }
+
+    return [ordered]@{
+        activeSchemeId = $guid
+        activeSchemeName = if ($guid -eq $GUID_SAVER) { 'Power Saver (Hermes Remote Optimized)' } elseif ($guid -eq $GUID_BAL) { 'Balanced' } elseif ($guid -eq $GUID_HIGH) { 'High Performance' } elseif ($guid) { "Unknown ($guid)" } else { $null }
+        detectedMode = if ($guid) { Get-JsonDetectedMode $guid } else { $null }
+        powerSource = Get-JsonPowerSource
+        discreteGpuPowerWatts = $null
+        cpuMaximumAcPercent = $cpuMaximumAc
+        cpuMaximumDcPercent = $cpuMaximumDc
+        cpuMinimumAcPercent = $cpuMinimumAc
+        cpuMinimumDcPercent = $cpuMinimumDc
+        processorBoostModeAc = $boostAc
+        processorBoostModeDc = $boostDc
+        brightnessAcPercent = $brightnessAc
+        brightnessDcPercent = $brightnessDc
+        displayTimeoutAcSeconds = $displayAc
+        displayTimeoutDcSeconds = $displayDc
+        sleepTimeoutAcSeconds = $sleepAc
+        sleepTimeoutDcSeconds = $sleepDc
+        hibernateTimeoutAcSeconds = $hibernateAc
+        hibernateTimeoutDcSeconds = $hibernateDc
+        wifiDisabled = $null
+    }
+}
+
+function Add-JsonExpectation {
+    param(
+        [string]$Field,
+        [object]$ExpectedValue,
+        [bool]$Critical
+    )
+
+    [void]$script:JsonResult.expectations.Add([ordered]@{
+        field = $Field
+        expectedValue = [string]$ExpectedValue
+        critical = $Critical
+    })
+}
+
+function Set-JsonPowerValue {
+    param(
+        [string]$Guid,
+        [string]$Subgroup,
+        [string]$Setting,
+        [object]$Value,
+        [string]$StepName,
+        [bool]$Critical
+    )
+
+    Set-PowerValueAcDc $Guid $Subgroup $Setting $Value $StepName $Critical
+}
+
+function Add-JsonStandardExpectations {
+    param(
+        [string]$Guid,
+        [int]$CpuMaximum,
+        [int]$Brightness,
+        [Nullable[int]]$DisplayTimeout
+    )
+
+    Add-JsonExpectation 'activeSchemeId' $Guid $true
+    Add-JsonExpectation 'cpuMaximumAcPercent' $CpuMaximum $true
+    Add-JsonExpectation 'cpuMaximumDcPercent' $CpuMaximum $true
+    Add-JsonExpectation 'brightnessAcPercent' $Brightness $false
+    Add-JsonExpectation 'brightnessDcPercent' $Brightness $false
+    if ($null -ne $DisplayTimeout) {
+        Add-JsonExpectation 'displayTimeoutAcSeconds' $DisplayTimeout $true
+        Add-JsonExpectation 'displayTimeoutDcSeconds' $DisplayTimeout $true
+    }
+    Add-JsonExpectation 'sleepTimeoutAcSeconds' 0 $true
+    Add-JsonExpectation 'sleepTimeoutDcSeconds' 0 $true
+    Add-JsonExpectation 'hibernateTimeoutAcSeconds' 0 $true
+    Add-JsonExpectation 'hibernateTimeoutDcSeconds' 0 $true
+}
+
+function Invoke-JsonApplyPreset {
+    param([string]$Preset)
+
+    $guid = $GUID_BAL
+    $cpuMaximum = 100
+    $brightness = $BrightnessBalanced
+    $displayTimeout = $null
+    $cpuMinimum = 5
+    $disableBoost = $false
+
+    switch ($Preset) {
+        'remote' {
+            $guid = $GUID_SAVER
+            $cpuMaximum = if ($null -ne $CpuMaximumPercent) { Limit-CpuMax $CpuMaximumPercent 32 } else { 32 }
+            $brightness = $BrightnessRemote
+            $displayTimeout = 60
+            $disableBoost = $true
+        }
+        'saver' {
+            $guid = $GUID_SAVER
+            $cpuMaximum = if ($null -ne $CpuMaximumPercent) { Limit-CpuMax $CpuMaximumPercent 30 } else { 30 }
+            $brightness = $BrightnessSaver
+            $displayTimeout = 60
+            $cpuMinimum = 3
+            $disableBoost = $true
+        }
+        'balanced' {
+            $guid = $GUID_BAL
+        }
+        'high' {
+            $guid = $GUID_HIGH
+        }
+    }
+
+    $script:JsonResult.requestedMode = $Preset
+    Set-ActivePlan $guid
+    Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonCpuMaximum $cpuMaximum 'cpu-maximum' $true
+    Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonCpuMinimum $cpuMinimum 'cpu-minimum' $true
+    if ($disableBoost) {
+        Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonBoostMode 0 'processor-boost' $true
+    }
+    Set-JsonPowerValue $guid $JsonVideoSubgroup $JsonBrightness $brightness 'brightness' $false
+    if ($null -ne $displayTimeout) {
+        Set-JsonPowerValue $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeout 'display-timeout' $true
+    }
+    Set-JsonPowerValue $guid $JsonSleepSubgroup $JsonSleepTimeout 0 'sleep-timeout' $true
+    Set-JsonPowerValue $guid $JsonSleepSubgroup $JsonHibernateTimeout 0 'hibernate-timeout' $true
+    Set-ActivePlan $guid
+    Add-JsonStandardExpectations $guid $cpuMaximum $brightness $displayTimeout
+}
+
+function Get-JsonProfileValue {
+    param(
+        [object]$Profile,
+        [string]$Name,
+        [object]$Default = $null
+    )
+
+    $property = $Profile.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $Default }
+    return $property.Value
+}
+
+function Invoke-JsonApplyCustom {
+    $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CustomProfileBase64))
+    $profile = $json | ConvertFrom-Json
+    $name = [string](Get-JsonProfileValue $profile 'name' (Get-JsonProfileValue $profile 'Name' 'Custom'))
+    $cpuMaximum = [int](Get-JsonProfileValue $profile 'cpuMax' (Get-JsonProfileValue $profile 'CpuMax' 50))
+    $cpuMinimum = [int](Get-JsonProfileValue $profile 'cpuMin' (Get-JsonProfileValue $profile 'CpuMin' 5))
+    $brightness = [int](Get-JsonProfileValue $profile 'brightness' (Get-JsonProfileValue $profile 'Brightness' 50))
+    $displayTimeout = [int](Get-JsonProfileValue $profile 'displayOffSeconds' (Get-JsonProfileValue $profile 'DisplayOffSeconds' 60))
+    $disableBoost = [bool](Get-JsonProfileValue $profile 'disableBoost' (Get-JsonProfileValue $profile 'DisableBoost' $true))
+    $guid = $GUID_SAVER
+
+    $script:JsonResult.requestedMode = "custom:$name"
+    Set-ActivePlan $guid
+    Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonCpuMaximum $cpuMaximum 'cpu-maximum' $true
+    Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonCpuMinimum $cpuMinimum 'cpu-minimum' $true
+    Set-JsonPowerValue $guid $JsonVideoSubgroup $JsonBrightness $brightness 'brightness' $false
+    Set-JsonPowerValue $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeout 'display-timeout' $true
+    if ($disableBoost) {
+        Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonBoostMode 0 'processor-boost' $true
+    }
+
+    Add-JsonExpectation 'activeSchemeId' $guid $true
+    Add-JsonExpectation 'cpuMaximumAcPercent' $cpuMaximum $true
+    Add-JsonExpectation 'cpuMaximumDcPercent' $cpuMaximum $true
+    Add-JsonExpectation 'cpuMinimumAcPercent' $cpuMinimum $true
+    Add-JsonExpectation 'cpuMinimumDcPercent' $cpuMinimum $true
+    Add-JsonExpectation 'brightnessAcPercent' $brightness $false
+    Add-JsonExpectation 'brightnessDcPercent' $brightness $false
+    Add-JsonExpectation 'displayTimeoutAcSeconds' $displayTimeout $true
+    Add-JsonExpectation 'displayTimeoutDcSeconds' $displayTimeout $true
+}
+
+function Invoke-JsonRestore {
+    $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($RestoreSnapshotBase64))
+    $snapshot = $json | ConvertFrom-Json
+
+    $guid = Get-JsonProfileValue $snapshot 'activeSchemeId'
+    if ($guid) {
+        Set-ActivePlan ([string]$guid)
+        Add-JsonExpectation 'activeSchemeId' ([string]$guid) $true
+    }
+
+    $restoreFields = @(
+        @('cpuMaximumAcPercent', $JsonCpuSubgroup, $JsonCpuMaximum, 'cpu-maximum', $true),
+        @('cpuMaximumDcPercent', $JsonCpuSubgroup, $JsonCpuMaximum, 'cpu-maximum-dc', $true),
+        @('brightnessAcPercent', $JsonVideoSubgroup, $JsonBrightness, 'brightness', $false),
+        @('brightnessDcPercent', $JsonVideoSubgroup, $JsonBrightness, 'brightness-dc', $false),
+        @('displayTimeoutAcSeconds', $JsonVideoSubgroup, $JsonDisplayTimeout, 'display-timeout', $true),
+        @('displayTimeoutDcSeconds', $JsonVideoSubgroup, $JsonDisplayTimeout, 'display-timeout-dc', $true),
+        @('sleepTimeoutAcSeconds', $JsonSleepSubgroup, $JsonSleepTimeout, 'sleep-timeout', $true),
+        @('sleepTimeoutDcSeconds', $JsonSleepSubgroup, $JsonSleepTimeout, 'sleep-timeout-dc', $true),
+        @('hibernateTimeoutAcSeconds', $JsonSleepSubgroup, $JsonHibernateTimeout, 'hibernate-timeout', $true),
+        @('hibernateTimeoutDcSeconds', $JsonSleepSubgroup, $JsonHibernateTimeout, 'hibernate-timeout-dc', $true)
+    )
+
+    foreach ($field in $restoreFields) {
+        $value = Get-JsonProfileValue $snapshot $field[0]
+        if ($null -ne $value) {
+            if ($field[0].EndsWith('DcPercent') -or $field[0].EndsWith('DcSeconds')) {
+                $null = Set-PowerValueDc $guid $field[1] $field[2] $value $field[3] $field[4]
+            } else {
+                $null = Set-PowerValue $guid $field[1] $field[2] $value $field[3] $field[4]
+            }
+            Add-JsonExpectation $field[0] $value $field[4]
+        }
+    }
+}
+
+function Get-JsonStateFieldValue {
+    param(
+        [object]$State,
+        [string]$Field
+    )
+
+    return $State.$Field
+}
+
+function Test-JsonExpectations {
+    foreach ($expectation in $script:JsonResult.expectations) {
+        $actual = Get-JsonStateFieldValue $script:JsonResult.afterState $expectation.field
+        if ([string]$actual -ne [string]$expectation.expectedValue) {
+            [void]$script:JsonResult.steps.Add([ordered]@{
+                name = "verify-$($expectation.field)"
+                critical = $expectation.critical
+                exitCode = 1
+                timedOut = $false
+                error = "Expected $($expectation.expectedValue), got $actual"
+            })
+        }
+    }
+}
+
+function Set-JsonOutcome {
+    $criticalFailure = $false
+    $optionalFailure = $false
+    foreach ($step in $script:JsonResult.steps) {
+        if ($step.exitCode -ne 0) {
+            if ($step.critical) { $criticalFailure = $true } else { $optionalFailure = $true }
+        }
+    }
+
+    if ($criticalFailure) {
+        $script:JsonResult.outcome = 'failed'
+    } elseif ($optionalFailure) {
+        $script:JsonResult.outcome = 'partial'
+    } else {
+        $script:JsonResult.outcome = 'succeeded'
+    }
+}
+
+function Invoke-JsonOperation {
+    $script:JsonStartedAtUtc = [DateTimeOffset]::UtcNow
+    $script:JsonStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $action = if ($Mode -eq 'status') { 'status' } elseif ($Mode -eq 'restore') { 'restore' } else { 'apply' }
+    $script:JsonResult = New-JsonResult $action
+    $script:JsonResult.beforeState = Get-JsonPowerModeState
+
+    switch ($Mode.Trim().ToLowerInvariant()) {
+        'status' {
+            $script:JsonResult.requestedMode = $null
+        }
+        'remote' { Invoke-JsonApplyPreset 'remote' }
+        'saver' { Invoke-JsonApplyPreset 'saver' }
+        'balanced' { Invoke-JsonApplyPreset 'balanced' }
+        'high' { Invoke-JsonApplyPreset 'high' }
+        'custom' { Invoke-JsonApplyCustom }
+        'restore' { Invoke-JsonRestore }
+        default {
+            [void]$script:JsonResult.steps.Add([ordered]@{
+                name = 'validate-mode'
+                critical = $true
+                exitCode = 1
+                timedOut = $false
+                error = "Unsupported mode: $Mode"
+            })
+        }
+    }
+
+    $script:JsonResult.afterState = Get-JsonPowerModeState
+    if ($script:JsonResult.expectations.Count -gt 0) {
+        Test-JsonExpectations
+    }
+    Set-JsonOutcome
+    $script:JsonResult.durationMs = [int64]$script:JsonStopwatch.ElapsedMilliseconds
+}
+
 Initialize-Config
+
+if ($OutputFormat -eq 'Json') {
+    try {
+        Invoke-JsonOperation
+    } catch {
+        if ($null -eq $script:JsonResult) {
+            $script:JsonStartedAtUtc = [DateTimeOffset]::UtcNow
+            $script:JsonResult = New-JsonResult 'error'
+        }
+        [void]$script:JsonResult.steps.Add([ordered]@{
+            name = 'engine'
+            critical = $true
+            exitCode = 1
+            timedOut = $false
+            error = $_.Exception.Message
+        })
+        $script:JsonResult.outcome = 'failed'
+        $script:JsonResult.durationMs = [int64]$script:JsonStopwatch.ElapsedMilliseconds
+    }
+
+    $jsonOutput = $script:JsonResult | ConvertTo-Json -Depth 8 -Compress
+    [Console]::Out.WriteLine($jsonOutput)
+    if ($script:JsonResult.outcome -eq 'failed') { exit 1 }
+    exit 0
+}
 
 if ([string]::IsNullOrWhiteSpace($Mode)) {
     Show-Menu
