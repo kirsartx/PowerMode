@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
 $project = Join-Path $rootPath "src\PowerMode.App\PowerMode.App.csproj"
 $cliSource = Join-Path $rootPath "src\PowerMode.Cli\PowerModeSwitcher.bat"
+$engineSource = Join-Path $rootPath "src\PowerMode.Cli\PowerMode.Engine.ps1"
 $readmeSource = Join-Path $rootPath "README.md"
 $dist = Join-Path $rootPath "dist"
 $output = Join-Path $dist "PowerMode-win-x64"
@@ -33,7 +34,7 @@ foreach ($path in @($dist, $output, $staging, $backup, $zip, $stagingZip, $appOu
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
     throw "Project not found: $project"
 }
-foreach ($source in @($cliSource, $readmeSource)) {
+foreach ($source in @($cliSource, $engineSource, $readmeSource)) {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Publish source not found: $source"
     }
@@ -51,19 +52,25 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }
 
-foreach ($name in @("PowerModeSwitcher.bat", "README.md")) {
+foreach ($name in @("PowerModeSwitcher.bat", "PowerMode.Engine.ps1", "README.md")) {
     $publishedCopy = Join-Path $appOutput $name
     if (Test-Path -LiteralPath $publishedCopy) {
         Remove-Item -LiteralPath $publishedCopy -Force
     }
 }
 Copy-Item -LiteralPath $cliSource -Destination (Join-Path $staging "PowerModeSwitcher.bat")
+Copy-Item -LiteralPath $engineSource -Destination (Join-Path $staging "PowerMode.Engine.ps1")
 Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $staging "README.md")
 
 $sourceCliHash = (Get-FileHash -LiteralPath $cliSource -Algorithm SHA256).Hash
 $publishedCliHash = (Get-FileHash -LiteralPath (Join-Path $staging "PowerModeSwitcher.bat") -Algorithm SHA256).Hash
 if ($sourceCliHash -ne $publishedCliHash) {
     throw "Published CLI integrity check failed."
+}
+$sourceEngineHash = (Get-FileHash -LiteralPath $engineSource -Algorithm SHA256).Hash
+$publishedEngineHash = (Get-FileHash -LiteralPath (Join-Path $staging "PowerMode.Engine.ps1") -Algorithm SHA256).Hash
+if ($sourceEngineHash -ne $publishedEngineHash) {
+    throw "Published PowerShell engine integrity check failed."
 }
 
 $launcher = @'

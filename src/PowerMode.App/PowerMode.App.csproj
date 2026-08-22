@@ -24,6 +24,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\PowerMode.Cli\PowerModeSwitcher.bat" Link="PowerModeSwitcher.bat" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\PowerMode.Cli\PowerMode.Engine.ps1" Link="PowerMode.Engine.ps1" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\README.md" Link="README.md" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="CopyGeneratedWinUIResourcesToPublish" AfterTargets="Publish">
