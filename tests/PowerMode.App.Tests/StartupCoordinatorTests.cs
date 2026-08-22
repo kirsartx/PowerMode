@@ -151,6 +151,30 @@ public sealed class StartupCoordinatorTests
     }
 
     [Fact]
+    public async Task AcceptRecoveredSettings_AfterCompletedStartupRechecksJournalBeforeReactivating()
+    {
+        var journal = new StartupJournal();
+        var activations = 0;
+        var coordinator = new StartupCoordinator(
+            journal,
+            new StartupBackend(),
+            (_, _) =>
+            {
+                activations++;
+                return Task.CompletedTask;
+            });
+        await coordinator.InitializeAsync(LoadedSettings());
+        journal.Current = Record(LastOperationStatus.Applying);
+
+        coordinator.AcceptRecoveredSettings(LoadedSettings());
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ResumeAfterRecoveryAsync());
+
+        Assert.Contains("requires", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, activations);
+    }
+
+    [Fact]
     public async Task InitializeAsync_MissingTypedLaunchStateDefersActivation()
     {
         var activations = 0;

@@ -750,7 +750,7 @@ public sealed partial class SettingsWindow : Window
             if (!result.Succeeded)
                 throw new InvalidOperationException(result.Error ?? (_zh ? "配置恢复失败。" : "Configuration restore failed."));
             _settings = SettingsStore.LoadStrict();
-            _owner.AcceptRecoveredSettings(_settings);
+            await _owner.AcceptRecoveredSettingsAsync(_settings);
             LoadSettings();
             ShowSaved(_zh ? "配置已恢复并立即生效。" : "Configuration restored and applied.");
         }

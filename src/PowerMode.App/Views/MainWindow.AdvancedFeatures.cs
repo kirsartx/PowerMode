@@ -211,8 +211,6 @@ public sealed partial class MainWindow
     private async Task ResumeStartupAfterRecoveryAsync(
         CancellationToken cancellationToken = default)
     {
-        if (!_startupActivationDeferred)
-            return;
         await _startupCoordinator.ResumeAfterRecoveryAsync(cancellationToken);
         _startupActivationDeferred = false;
         await RefreshStatusAsync();
@@ -222,9 +220,9 @@ public sealed partial class MainWindow
         SettingsLoadResult recovered,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        AcceptRecoveredSettings(recovered);
-        await ResumeStartupAfterRecoveryAsync(cancellationToken);
+        await _recoveredSettingsActivationFlow.RunAsync(
+            recovered,
+            cancellationToken);
     }
 
     internal Task<RecoveryActionResult> ResetSettingsDefaultsAsync(
@@ -515,7 +513,14 @@ public sealed partial class MainWindow
         SwitchRequestContext context,
         CustomPowerProfile? customProfile = null)
     {
-        if (_startupActivationDeferred)
+        var attempt = await _startupMutationGate.TryRunAsync(() =>
+            RunTargetAfterStartupAsync(
+                target,
+                cpuMaximumPercent,
+                disableWifi,
+                context,
+                customProfile));
+        if (!attempt.Allowed)
         {
             PresentStartupRecovery(new(
                 true,
@@ -526,6 +531,16 @@ public sealed partial class MainWindow
                     : "Verify or restore the last operation in Recovery Center first."));
             return false;
         }
+        return attempt.Value;
+    }
+
+    private async Task<bool> RunTargetAfterStartupAsync(
+        PowerModeTarget target,
+        int? cpuMaximumPercent,
+        bool disableWifi,
+        SwitchRequestContext context,
+        CustomPowerProfile? customProfile)
+    {
         if (_modeSwitchInProgress)
         {
             StatusText.Text = IsChinese

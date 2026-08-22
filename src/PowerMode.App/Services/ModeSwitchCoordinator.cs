@@ -15,6 +15,10 @@ internal interface IModeSwitchCoordinator
         ModeSwitchRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<ModeSwitchResult?> RestoreSnapshotAsync(
+        SnapshotRestoreRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<LastOperationVerificationResult> VerifyLastOperationAsync(
         Guid operationId,
         CancellationToken cancellationToken = default);
@@ -80,14 +84,23 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             {
                 return CancelledResult(request.OperationId);
             }
-            catch
+            catch (Exception exception)
             {
                 _recoveryRequired = true;
-                return null;
+                return RecoveryRequiredResult(
+                    request.OperationId,
+                    exception.Message);
             }
 
-            if (!journal.Succeeded ||
-                journal.Record is { } record && IsRecoveryPending(record.Status))
+            if (!journal.Succeeded)
+            {
+                _recoveryRequired = true;
+                return RecoveryRequiredResult(
+                    request.OperationId,
+                    journal.Error ?? "The operation journal could not be read.");
+            }
+
+            if (journal.Record is { } record && IsRecoveryPending(record.Status))
             {
                 _recoveryRequired = true;
                 return null;
@@ -99,6 +112,244 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         {
             _operationGate.Release();
         }
+    }
+
+    public async Task<ModeSwitchResult?> RestoreSnapshotAsync(
+        SnapshotRestoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Snapshot);
+        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_recoveryRequired)
+                return null;
+            if (cancellationToken.IsCancellationRequested)
+                return CancelledResult(request.OperationId);
+
+            LastOperationReadResult journal;
+            try
+            {
+                journal = await _lastOperationStore.ReadAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return CancelledResult(request.OperationId);
+            }
+            catch (Exception exception)
+            {
+                _recoveryRequired = true;
+                return RecoveryRequiredResult(request.OperationId, exception.Message);
+            }
+
+            if (!journal.Succeeded)
+            {
+                _recoveryRequired = true;
+                return RecoveryRequiredResult(
+                    request.OperationId,
+                    journal.Error ?? "The operation journal could not be read.");
+            }
+            if (journal.Record is { } record && IsRecoveryPending(record.Status))
+            {
+                _recoveryRequired = true;
+                return RecoveryRequiredResult(
+                    request.OperationId,
+                    "The previous power operation must be recovered first.");
+            }
+
+            return await RestoreSnapshotCoreAsync(request, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    private async Task<ModeSwitchResult> RestoreSnapshotCoreAsync(
+        SnapshotRestoreRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.OperationId == Guid.Empty)
+            return FailedResult(request.OperationId, "Operation ID is required.");
+
+        var expectations = DeriveSnapshotExpectations(request.Snapshot);
+        if (expectations.Count == 0)
+        {
+            return FailedResult(
+                request.OperationId,
+                "The launch-state snapshot contains no restorable values.");
+        }
+
+        PowerModeState? beforeState;
+        try
+        {
+            var initial = await _backend.ReadStateAsync(
+                request.OperationId,
+                cancellationToken).ConfigureAwait(false);
+            beforeState = IsReliableRead(initial.Operation) ? initial.State : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CancelledResult(request.OperationId);
+        }
+        catch (Exception exception)
+        {
+            return FailedResult(request.OperationId, exception.Message);
+        }
+
+        if (beforeState is null)
+        {
+            return FailedResult(
+                request.OperationId,
+                "The current power state could not be read reliably; no restore was attempted.");
+        }
+
+        var prepared = new LastOperationRecord(
+            JournalSchemaVersion,
+            request.OperationId,
+            request.Source,
+            request.Reason,
+            PowerModeTarget.ForSnapshot(request.Snapshot),
+            null,
+            false,
+            _timeProvider.GetUtcNow(),
+            beforeState,
+            LastOperationStatus.Prepared);
+        var preparedWrite = await TryWriteAsync(
+            prepared,
+            expectedOperationId: null,
+            cancellationToken).ConfigureAwait(false);
+        if (!preparedWrite.Succeeded)
+        {
+            var error = preparedWrite.Error ??
+                "The snapshot-restore journal could not be prepared.";
+            var failed = FailedResult(request.OperationId, error, beforeState);
+            if (!preparedWrite.Conflict)
+                return failed;
+
+            _recoveryRequired = true;
+            return failed with
+            {
+                RequiresRecovery = true,
+                JournalError = error
+            };
+        }
+
+        var applying = prepared with { Status = LastOperationStatus.Applying };
+        var applyingWrite = await TryWriteAsync(
+            applying,
+            request.OperationId,
+            cancellationToken).ConfigureAwait(false);
+        if (!applyingWrite.Succeeded)
+        {
+            var error = applyingWrite.Error ??
+                "The snapshot-restore Applying record could not be written.";
+            _recoveryRequired = true;
+            return FailedResult(request.OperationId, error, beforeState) with
+            {
+                RequiresRecovery = true,
+                JournalError = error
+            };
+        }
+
+        using var cleanup = new CancellationTokenSource(CleanupTimeout);
+        BackendOperationResult restore;
+        try
+        {
+            restore = await _backend.RestoreAsync(
+                request.OperationId,
+                request.Snapshot,
+                cleanup.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            restore = BackendOperationResult.ContractFailure(
+                BackendOperationOutcome.Failed,
+                exception.Message) with { OperationId = request.OperationId };
+        }
+
+        PowerModeState? afterState = null;
+        BackendOperationResult? readbackOperation = null;
+        try
+        {
+            var readback = await _backend.ReadStateAsync(
+                request.OperationId,
+                cleanup.Token).ConfigureAwait(false);
+            afterState = IsReliableRead(readback.Operation) ? readback.State : null;
+            readbackOperation = readback.Operation;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            readbackOperation = BackendOperationResult.ContractFailure(
+                BackendOperationOutcome.InvalidResponse,
+                exception.Message) with { OperationId = request.OperationId };
+        }
+
+        var mismatches = CompareExpectations(expectations, afterState);
+        var restoreSucceeded = restore.Outcome is
+            BackendOperationOutcome.Succeeded or BackendOperationOutcome.Partial;
+        var confirmed = restoreSucceeded &&
+            restore.OperationId == request.OperationId &&
+            string.Equals(restore.Action, "restore", StringComparison.OrdinalIgnoreCase) &&
+            mismatches.Count == 0;
+        var steps = restore.Steps
+            .Concat(readbackOperation?.Steps ?? Array.Empty<BackendStepResult>())
+            .ToArray();
+
+        if (confirmed)
+        {
+            var succeeded = new ModeSwitchResult(
+                request.OperationId,
+                ModeSwitchOutcome.Succeeded,
+                beforeState,
+                afterState,
+                steps,
+                null,
+                "Launch power state restored and verified.",
+                BuildDiagnosticSummary(
+                    request.OperationId,
+                    restore,
+                    readbackOperation,
+                    mismatches));
+            return await CompleteSnapshotRestoreAsync(
+                applying,
+                succeeded,
+                LastOperationStatus.Verified,
+                cleanup.Token).ConfigureAwait(false);
+        }
+
+        var rollback = await RestoreAndConfirmAsync(
+            request.OperationId,
+            beforeState,
+            cleanup.Token).ConfigureAwait(false);
+        var outcome = rollback.Succeeded
+            ? restore.Outcome == BackendOperationOutcome.TimedOut
+                ? ModeSwitchOutcome.TimedOut
+                : ModeSwitchOutcome.Failed
+            : ModeSwitchOutcome.RollbackFailed;
+        var failedResult = new ModeSwitchResult(
+            request.OperationId,
+            outcome,
+            beforeState,
+            afterState,
+            steps,
+            rollback,
+            "The launch power state could not be restored and verified.",
+            BuildDiagnosticSummary(
+                request.OperationId,
+                restore,
+                readbackOperation,
+                mismatches));
+        return await CompleteSnapshotRestoreAsync(
+            applying,
+            failedResult,
+            rollback.Succeeded
+                ? LastOperationStatus.RolledBack
+                : LastOperationStatus.Uncertain,
+            cleanup.Token).ConfigureAwait(false);
     }
 
     private async Task<ModeSwitchResult> TrySwitchCoreAsync(
@@ -186,10 +437,17 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             cancellationToken).ConfigureAwait(false);
         if (!applyingWrite.Succeeded)
         {
+            var error = applyingWrite.Error ??
+                "The applying journal record could not be written.";
+            _recoveryRequired = true;
             return FailedResult(
                 request.OperationId,
-                applyingWrite.Error ?? "The applying journal record could not be written.",
-                beforeState);
+                error,
+                beforeState) with
+            {
+                RequiresRecovery = true,
+                JournalError = error
+            };
         }
 
         using var cleanup = new CancellationTokenSource(CleanupTimeout);
@@ -494,6 +752,36 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         return result;
     }
 
+    private async Task<ModeSwitchResult> CompleteSnapshotRestoreAsync(
+        LastOperationRecord applying,
+        ModeSwitchResult result,
+        LastOperationStatus terminalStatus,
+        CancellationToken cancellationToken)
+    {
+        var terminal = await TryWriteAsync(
+            applying with
+            {
+                Status = terminalStatus,
+                Outcome = result.Outcome,
+                Rollback = result.Rollback
+            },
+            applying.OperationId,
+            cancellationToken).ConfigureAwait(false);
+        if (!terminal.Succeeded)
+        {
+            _recoveryRequired = true;
+            return result with
+            {
+                RequiresRecovery = true,
+                JournalError = terminal.Error ??
+                    "The terminal snapshot-restore journal write failed."
+            };
+        }
+
+        _recoveryRequired = terminalStatus == LastOperationStatus.Uncertain;
+        return result;
+    }
+
     private async Task<LastOperationWriteResult> TryWriteAsync(
         LastOperationRecord record,
         Guid? expectedOperationId,
@@ -568,6 +856,12 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         if (request.OperationId == Guid.Empty)
             throw new ArgumentException("Operation ID is required.", nameof(request));
         ArgumentNullException.ThrowIfNull(request.Target);
+        if (request.Target.Snapshot is not null)
+        {
+            throw new ArgumentException(
+                "Snapshot targets must use RestoreSnapshotAsync.",
+                nameof(request));
+        }
 
         if (request.Target.Preset is PowerModePreset.Balanced or PowerModePreset.High or null &&
             request.CpuMaximumPercent.HasValue)
@@ -638,14 +932,28 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
     }
 
     private static IReadOnlyList<VerificationExpectation> DeriveExpectations(
-        LastOperationRecord record) =>
-        DeriveExpectations(new ModeSwitchRequest(
+        LastOperationRecord record) => record.Target.Snapshot is { } snapshot
+        ? DeriveSnapshotExpectations(snapshot)
+        : DeriveExpectations(new ModeSwitchRequest(
             record.OperationId,
             record.Target,
             record.CpuMaximumPercent,
             record.DisableWifi,
             record.Source,
             record.Reason));
+
+    private static IReadOnlyList<VerificationExpectation> DeriveSnapshotExpectations(
+        PowerModeState snapshot)
+    {
+        var expectations = new List<VerificationExpectation>();
+        foreach (var field in Enum.GetValues<PowerModeStateField>())
+        {
+            var value = GetFieldValue(snapshot, field);
+            if (value is not null)
+                Add(expectations, field, value, critical: true);
+        }
+        return expectations;
+    }
 
     private static void AddStandardExpectations(
         ICollection<VerificationExpectation> expectations,
@@ -825,6 +1133,14 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         null,
         "The mode switch could not be completed.",
         $"operationId={operationId:D}; {Bound(error)}");
+
+    private static ModeSwitchResult RecoveryRequiredResult(
+        Guid operationId,
+        string error) => FailedResult(operationId, error) with
+    {
+        RequiresRecovery = true,
+        JournalError = Bound(error)
+    };
 
     private static ModeSwitchResult CancelledResult(
         Guid operationId,

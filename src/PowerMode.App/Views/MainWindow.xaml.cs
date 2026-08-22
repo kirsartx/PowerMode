@@ -19,12 +19,15 @@ public sealed partial class MainWindow : Window
     private readonly IPowerModeBackend _powerModeBackend;
     private readonly ILastOperationStore _lastOperationStore;
     private readonly IModeSwitchCoordinator _modeSwitchCoordinator;
+    private readonly ExitRestoreCoordinator _exitRestoreCoordinator;
+    private readonly StartupMutationGate _startupMutationGate;
     private readonly ISettingsActivationCoordinator _settingsActivationCoordinator;
     private readonly IStartupCoordinator _startupCoordinator;
+    private readonly RecoveredSettingsActivationFlow _recoveredSettingsActivationFlow;
     private string _language = "zh";
     private bool _syncingCpu;
     private readonly bool _startHidden;
-    private bool _startupActivationDeferred;
+    private bool _startupActivationDeferred = true;
     private PowerModeState? _startupPowerState;
     private ModeSwitchResult? _lastModeSwitchResult;
     private ModeSwitchPresentationAction _statusAction;
@@ -75,11 +78,13 @@ public sealed partial class MainWindow : Window
         _processRunner = new ProcessRunner();
         _powerModeBackend = new PowerModeBackend(_processRunner, _enginePath);
         _lastOperationStore = new LastOperationStore();
+        _startupMutationGate = new StartupMutationGate();
         _modeSwitchCoordinator = new ModeSwitchCoordinator(
             _powerModeBackend,
             _lastOperationStore,
             HistoryStore.Default,
             TimeProvider.System);
+        _exitRestoreCoordinator = new ExitRestoreCoordinator(_modeSwitchCoordinator);
         _settingsActivationCoordinator = new SettingsActivationCoordinator(
             _settingsLoadResult,
             new MainWindowSettingsActivationEffects(this));
@@ -88,7 +93,12 @@ public sealed partial class MainWindow : Window
             _powerModeBackend,
             (load, token) => _settingsActivationCoordinator.ActivateAsync(
                 SettingsActivationPolicy.For(load.State),
-                token));
+                token),
+            _startupMutationGate);
+        _recoveredSettingsActivationFlow = new RecoveredSettingsActivationFlow(
+            AcceptRecoveredSettingsState,
+            ResumeStartupAfterRecoveryAsync,
+            ApplyRecoveredSettingsPresentation);
         _recoveryService = new RecoveryService(
             _lastOperationStore,
             _modeSwitchCoordinator,

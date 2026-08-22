@@ -23,6 +23,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
     private readonly ILastOperationStore _lastOperationStore;
     private readonly IPowerModeBackend _backend;
     private readonly Func<SettingsLoadResult, CancellationToken, Task> _activateAsync;
+    private readonly StartupMutationGate _mutationGate;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private SettingsLoadResult? _settingsLoad;
     private StartupInitializationResult? _initializationResult;
@@ -32,13 +33,15 @@ internal sealed class StartupCoordinator : IStartupCoordinator
     public StartupCoordinator(
         ILastOperationStore lastOperationStore,
         IPowerModeBackend backend,
-        Func<SettingsLoadResult, CancellationToken, Task> activateAsync)
+        Func<SettingsLoadResult, CancellationToken, Task> activateAsync,
+        StartupMutationGate? mutationGate = null)
     {
         _lastOperationStore = lastOperationStore
             ?? throw new ArgumentNullException(nameof(lastOperationStore));
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
         _activateAsync = activateAsync
             ?? throw new ArgumentNullException(nameof(activateAsync));
+        _mutationGate = mutationGate ?? new StartupMutationGate();
     }
 
     public async Task<StartupInitializationResult> InitializeAsync(
@@ -103,6 +106,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
                     "Settings are corrupt; startup activation is disabled until recovery completes."));
             }
 
+            _mutationGate.Open();
             var activationError = await ActivateOnceAsync(
                 settingsLoad,
                 cancellationToken).ConfigureAwait(false);
@@ -127,8 +131,6 @@ internal sealed class StartupCoordinator : IStartupCoordinator
             if (_settingsLoad is null)
                 throw new InvalidOperationException(
                     "Startup must be initialized before resuming after recovery.");
-            if (_activationCompleted)
-                return;
             if (!_settingsLoad.AllowsExternalSideEffects)
                 throw new InvalidOperationException(
                     "Settings recovery must complete before startup activation can resume.");
@@ -141,6 +143,9 @@ internal sealed class StartupCoordinator : IStartupCoordinator
                 throw new InvalidOperationException(
                     "The last operation still requires verification or restoration.");
 
+            if (_activationCompleted)
+                return;
+
             if (_launchState is null)
             {
                 var reality = await _backend.ReadStateAsync(
@@ -150,6 +155,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
                     "The typed launch power state could not be captured reliably.");
             }
 
+            _mutationGate.Open();
             var error = await ActivateOnceAsync(_settingsLoad, cancellationToken)
                 .ConfigureAwait(false);
             if (error is not null)
@@ -168,6 +174,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
             throw new InvalidOperationException(
                 "Recovered settings must be usable before startup can resume.");
         _settingsLoad = recovered;
+        _activationCompleted = false;
     }
 
     private async Task<string?> ActivateOnceAsync(

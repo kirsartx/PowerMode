@@ -98,9 +98,29 @@ public sealed class LastOperationStoreTests
         Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
     }
 
+    [Fact]
+    public async Task WriteAsync_RoundTripsExactSnapshotRestoreTarget()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new LastOperationStore(
+            Path.Combine(directory.Path, "last-operation.json"));
+        var expected = JournalRecords.Prepared(Guid.NewGuid()) with
+        {
+            Target = PowerModeTarget.ForSnapshot(JournalRecords.State)
+        };
+
+        var write = await store.WriteAsync(expected);
+        var actual = await store.ReadAsync();
+
+        Assert.True(write.Succeeded);
+        Assert.Null(actual.Error);
+        Assert.Equal(expected, actual.Record);
+        Assert.Equal(JournalRecords.State, actual.Record!.Target.Snapshot);
+    }
+
     private static class JournalRecords
     {
-        private static PowerModeState State => new(
+        public static PowerModeState State => new(
             Guid.Parse("381b4222-f694-41f0-9685-ff5bb260df2e"),
             "Balanced",
             PowerModePreset.Balanced,

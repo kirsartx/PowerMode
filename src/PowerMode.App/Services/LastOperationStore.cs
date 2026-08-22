@@ -233,6 +233,7 @@ internal sealed class LastOperationStore : ILastOperationStore
         public string? Reason { get; init; }
         public string? Preset { get; init; }
         public CustomPowerProfileSnapshot? CustomProfile { get; init; }
+        public PowerModeState? Snapshot { get; init; }
         public int? CpuMaximumPercent { get; init; }
         public bool DisableWifi { get; init; }
         public DateTimeOffset StartedAtUtc { get; init; }
@@ -249,6 +250,7 @@ internal sealed class LastOperationStore : ILastOperationStore
             Reason = record.Reason,
             Preset = record.Target.Preset?.ToString(),
             CustomProfile = record.Target.CustomProfile,
+            Snapshot = record.Target.Snapshot,
             CpuMaximumPercent = record.CpuMaximumPercent,
             DisableWifi = record.DisableWifi,
             StartedAtUtc = record.StartedAtUtc,
@@ -260,9 +262,16 @@ internal sealed class LastOperationStore : ILastOperationStore
 
         public LastOperationRecord ToRecord()
         {
-            var target = CustomProfile is not null
-                ? PowerModeTarget.ForCustom(CustomProfile)
-                : PowerModeTarget.ForPreset(ParsePreset(Preset));
+            var targetKinds = (CustomProfile is not null ? 1 : 0) +
+                (Snapshot is not null ? 1 : 0) +
+                (!string.IsNullOrWhiteSpace(Preset) ? 1 : 0);
+            if (targetKinds != 1)
+                throw new JsonException("Last operation target is invalid.");
+            var target = Snapshot is not null
+                ? PowerModeTarget.ForSnapshot(Snapshot)
+                : CustomProfile is not null
+                    ? PowerModeTarget.ForCustom(CustomProfile)
+                    : PowerModeTarget.ForPreset(ParsePreset(Preset));
             return new(
                 SchemaVersion,
                 OperationId,

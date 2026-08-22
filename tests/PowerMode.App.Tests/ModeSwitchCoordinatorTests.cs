@@ -158,15 +158,28 @@ public sealed class ModeSwitchCoordinatorTests
     }
 
     [Fact]
-    public async Task TrySwitchAsync_JournalReadErrorBlocksBeforeStateRead()
+    public async Task TrySwitchAsync_JournalReadErrorLatchesPersistentRecoveryBeforeStateRead()
     {
         var backend = ScenarioBackend.ForRemote(cpu: 31);
         var journal = new RecordingLastOperationStore { ReadError = "journal unreadable" };
         var coordinator = TestCoordinator.Create(backend, journal);
 
-        Assert.Null(await coordinator.TrySwitchAsync(Requests.Remote()));
+        var result = await coordinator.TrySwitchAsync(Requests.Remote());
+
+        Assert.NotNull(result);
+        Assert.True(result.RequiresRecovery);
+        Assert.Equal("journal unreadable", result.JournalError);
+        var presentation = ModeSwitchResultPresentationPolicy.Create(
+            result,
+            ExperienceMode.Simple,
+            isChinese: false);
+        Assert.True(presentation.IsPersistent);
+        Assert.Equal(
+            ModeSwitchPresentationAction.OpenRecoveryCenter,
+            presentation.Action);
         Assert.Equal(0, backend.ReadCount);
         Assert.Equal(0, backend.ApplyCount);
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
     }
 
     [Fact]
@@ -241,7 +254,7 @@ public sealed class ModeSwitchCoordinatorTests
     }
 
     [Fact]
-    public async Task TrySwitchAsync_ApplyingWriteFailureNeverMutatesBackend()
+    public async Task TrySwitchAsync_ApplyingWriteFailureLatchesRecoveryAndNeverMutatesBackend()
     {
         var backend = ScenarioBackend.ForRemote(cpu: 31);
         var journal = new RecordingLastOperationStore
@@ -255,8 +268,11 @@ public sealed class ModeSwitchCoordinatorTests
         var result = await coordinator.TrySwitchAsync(Requests.Remote());
 
         Assert.Equal(ModeSwitchOutcome.Failed, result!.Outcome);
+        Assert.True(result.RequiresRecovery);
+        Assert.Equal("journal unavailable", result.JournalError);
         Assert.Equal(0, backend.ApplyCount);
         Assert.Equal(LastOperationStatus.Prepared, journal.Writes[^1].Status);
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
     }
 
     [Fact]
@@ -344,6 +360,67 @@ public sealed class ModeSwitchCoordinatorTests
 
         Assert.True(verification.MatchesCriticalExpectations);
         Assert.Equal(LastOperationStatus.Verified, journal.Writes[^1].Status);
+    }
+
+    [Fact]
+    public async Task RestoreSnapshotAsync_WaitsForInFlightSwitchThenJournalsAndConfirmsExactSnapshot()
+    {
+        var backend = new ScenarioBackend(blockApply: true);
+        var launchState = backend.BalancedState() with
+        {
+            CpuMinimumAcPercent = 7,
+            CpuMinimumDcPercent = 4,
+            ProcessorBoostModeAc = 2,
+            ProcessorBoostModeDc = 1,
+            WifiDisabled = true
+        };
+        var switchedState = backend.RemoteState(31);
+        backend.Reads.Enqueue(backend.ReadResult(backend.BalancedState()));
+        backend.Applies.Enqueue(backend.Operation(
+            "apply",
+            BackendOperationOutcome.Succeeded,
+            switchedState,
+            PowerModeTarget.ForPreset(PowerModePreset.Remote).Key,
+            RemoteExpectations(31)));
+        backend.Reads.Enqueue(backend.ReadResult(switchedState));
+        backend.Reads.Enqueue(backend.ReadResult(switchedState));
+        backend.Restores.Enqueue(backend.Operation(
+            "restore",
+            BackendOperationOutcome.Succeeded,
+            launchState));
+        backend.Reads.Enqueue(backend.ReadResult(launchState));
+        var journal = new RecordingLastOperationStore();
+        var coordinator = TestCoordinator.Create(backend, journal);
+        var switchTask = coordinator.TrySwitchAsync(Requests.Remote());
+        await backend.ApplyStarted.Task;
+
+        var restoreTask = coordinator.RestoreSnapshotAsync(new SnapshotRestoreRequest(
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            launchState,
+            "shutdown",
+            "restore exact launch state"));
+
+        Assert.False(restoreTask.IsCompleted);
+        Assert.Equal(0, backend.RestoreCount);
+
+        backend.CompleteApply();
+        Assert.Equal(ModeSwitchOutcome.Succeeded, (await switchTask)!.Outcome);
+        var result = await restoreTask;
+
+        Assert.Equal(ModeSwitchOutcome.Succeeded, result!.Outcome);
+        Assert.Equal(launchState, result.AfterState);
+        Assert.Equal(1, backend.RestoreCount);
+        Assert.Equal(
+            [
+                LastOperationStatus.Prepared,
+                LastOperationStatus.Applying,
+                LastOperationStatus.Verified,
+                LastOperationStatus.Prepared,
+                LastOperationStatus.Applying,
+                LastOperationStatus.Verified
+            ],
+            journal.Writes.Select(record => record.Status));
+        Assert.Equal(launchState, journal.Writes[^1].Target.Snapshot);
     }
 
     private static class Requests

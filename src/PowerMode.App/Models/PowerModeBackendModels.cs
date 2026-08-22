@@ -68,22 +68,27 @@ internal sealed record PowerModeTarget
     public string Key { get; }
     public PowerModePreset? Preset { get; }
     public CustomPowerProfileSnapshot? CustomProfile { get; }
+    public PowerModeState? Snapshot { get; }
 
     private PowerModeTarget(
         string key,
         PowerModePreset? preset,
-        CustomPowerProfileSnapshot? customProfile)
+        CustomPowerProfileSnapshot? customProfile,
+        PowerModeState? snapshot)
     {
-        if (string.IsNullOrWhiteSpace(key) ||
-            (preset.HasValue == (customProfile is not null)))
+        var targetKinds = (preset.HasValue ? 1 : 0) +
+            (customProfile is not null ? 1 : 0) +
+            (snapshot is not null ? 1 : 0);
+        if (string.IsNullOrWhiteSpace(key) || targetKinds != 1)
         {
             throw new ArgumentException(
-                "A target must contain exactly one preset or custom profile.");
+                "A target must contain exactly one preset, custom profile or state snapshot.");
         }
 
         Key = key;
         Preset = preset;
         CustomProfile = customProfile;
+        Snapshot = snapshot;
     }
 
     public static PowerModeTarget ForPreset(PowerModePreset preset)
@@ -93,7 +98,7 @@ internal sealed record PowerModeTarget
             throw new ArgumentOutOfRangeException(nameof(preset));
         }
 
-        return new(preset.ToString().ToLowerInvariant(), preset, null);
+        return new(preset.ToString().ToLowerInvariant(), preset, null, null);
     }
 
     public static PowerModeTarget ForCustom(
@@ -107,7 +112,13 @@ internal sealed record PowerModeTarget
                 nameof(profile));
         }
 
-        return new($"custom:{profile.Name}", null, profile);
+        return new($"custom:{profile.Name}", null, profile, null);
+    }
+
+    public static PowerModeTarget ForSnapshot(PowerModeState snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return new("snapshot:launch-state", null, null, snapshot);
     }
 }
 

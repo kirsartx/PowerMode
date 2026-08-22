@@ -21,6 +21,12 @@ internal sealed record ModeSwitchRequest(
     string? RuleName = null,
     bool RecordHistory = true);
 
+internal sealed record SnapshotRestoreRequest(
+    Guid OperationId,
+    PowerModeState Snapshot,
+    string Source,
+    string? Reason);
+
 internal sealed record RollbackResult(
     bool Attempted,
     bool Succeeded,

@@ -25,6 +25,7 @@ public sealed partial class MainWindow
     private bool _trayAdded;
     private bool _globalHotkeysAvailable;
     private bool _closingAfterRestore;
+    private bool _exitRestoreInProgress;
     private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
     private HardwareCapabilityService? _hardwareCapabilityService;
     private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
@@ -52,14 +53,14 @@ public sealed partial class MainWindow
         }
     }
 
-    internal void AcceptRecoveredSettings(PowerModeSettings settings)
+    internal Task AcceptRecoveredSettingsAsync(PowerModeSettings settings)
     {
-        AcceptRecoveredSettings(new SettingsLoadResult(
+        return _recoveredSettingsActivationFlow.RunAsync(new SettingsLoadResult(
             SettingsLoadState.Loaded,
             settings));
     }
 
-    private void AcceptRecoveredSettings(SettingsLoadResult recovered)
+    private void AcceptRecoveredSettingsState(SettingsLoadResult recovered)
     {
         ArgumentNullException.ThrowIfNull(recovered);
         if (!recovered.AllowsExternalSideEffects)
@@ -68,7 +69,11 @@ public sealed partial class MainWindow
         _startupCoordinator.AcceptRecoveredSettings(recovered);
         _settingsLoadResult = recovered;
         _featureSettings = recovered.Settings;
-        ApplyFeatureSettings(recovered.Settings);
+    }
+
+    private void ApplyRecoveredSettingsPresentation(SettingsLoadResult recovered)
+    {
+        ApplyFeatureSettingsPresentation(recovered.Settings);
         StatusBar.Severity = InfoBarSeverity.Success;
         StatusText.Text = IsChinese
             ? "配置已恢复，可继续编辑设置"
@@ -205,11 +210,34 @@ public sealed partial class MainWindow
             _startupPowerState is { } startupState)
         {
             args.Cancel = true;
-            _closingAfterRestore = true;
-            var restore = await _powerModeBackend.RestoreAsync(
-                Guid.NewGuid(),
+            if (_exitRestoreInProgress)
+                return;
+
+            _exitRestoreInProgress = true;
+            var decision = await _exitRestoreCoordinator.RestoreLaunchStateAsync(
                 startupState);
-            AppendBackendDiagnostics(restore);
+            _exitRestoreInProgress = false;
+            if (!decision.ShouldClose)
+            {
+                if (decision.Operation is { } failedOperation)
+                {
+                    AppendLog(failedOperation.DiagnosticSummary);
+                    PresentModeSwitchResult(failedOperation);
+                }
+                else
+                {
+                    PresentStartupRecovery(new(
+                        true,
+                        null,
+                        null,
+                        decision.Error ?? "The launch-state restore could not be completed."));
+                }
+                return;
+            }
+
+            if (decision.Operation is { } completedOperation)
+                AppendLog(completedOperation.DiagnosticSummary);
+            _closingAfterRestore = true;
             Close();
             return;
         }

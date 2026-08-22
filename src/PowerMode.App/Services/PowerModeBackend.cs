@@ -77,6 +77,12 @@ internal sealed class PowerModeBackend : IPowerModeBackend
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(target);
+        if (target.Snapshot is not null)
+        {
+            throw new ArgumentException(
+                "Snapshot targets must be executed through RestoreAsync.",
+                nameof(target));
+        }
         var arguments = new List<string> { "-Mode" };
         if (target.Preset.HasValue)
         {

@@ -840,6 +840,11 @@ public sealed class RecoveryServiceTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<ModeSwitchResult?> RestoreSnapshotAsync(
+            SnapshotRestoreRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<LastOperationVerificationResult> VerifyLastOperationAsync(
             Guid operationId,
             CancellationToken cancellationToken = default)

@@ -195,7 +195,7 @@ public sealed class RecoveryCenterPresentationTests
         Assert.DoesNotContain("Process.Start(new ProcessStartInfo(\"powercfg.exe\"", combined);
         Assert.DoesNotContain("Regex.Matches(result.Output", combined);
         Assert.DoesNotContain("ApplyStatus(result.Output)", combined);
-        Assert.Contains("_powerModeBackend.RestoreAsync(", features);
+        Assert.Contains("_exitRestoreCoordinator.RestoreLaunchStateAsync(", features);
         Assert.Contains("_startupPowerState", features);
         Assert.DoesNotContain("_startupPowerState?.DetectedMode", features);
     }
