@@ -1108,6 +1108,88 @@ function Get-JsonPowerSource {
     }
 }
 
+function Get-JsonWifiDisabled {
+    $testStatePath = $env:POWERMODE_TEST_POWER_STATE
+    if (-not [string]::IsNullOrWhiteSpace($testStatePath) -and
+        (Test-Path -LiteralPath $testStatePath)) {
+        try {
+            $testState = Get-Content -Raw -LiteralPath $testStatePath | ConvertFrom-Json
+            $testValue = $testState.PSObject.Properties['wifiDisabled']
+            if ($null -ne $testValue) { return [bool]$testValue.Value }
+        } catch {
+            return $null
+        }
+    }
+
+    try {
+        $wifiAdapters = @(Get-NetAdapter -ErrorAction Stop | Where-Object {
+            $_.Name -like '*Wi*' -or
+            $_.InterfaceDescription -like '*Wireless*' -or
+            $_.InterfaceDescription -like '*Wi-Fi*' -or
+            $_.InterfaceDescription -like '*WLAN*'
+        })
+        if ($wifiAdapters.Count -eq 0) { return $null }
+        return -not [bool]($wifiAdapters | Where-Object { $_.Status -eq 'Up' })
+    } catch {
+        return $null
+    }
+}
+
+function Set-JsonWifiDisabled {
+    param(
+        [bool]$Disabled,
+        [string]$StepName = 'wifi-state',
+        [bool]$Critical = $false
+    )
+
+    try {
+        $testStatePath = $env:POWERMODE_TEST_POWER_STATE
+        if (-not [string]::IsNullOrWhiteSpace($testStatePath) -and
+            (Test-Path -LiteralPath $testStatePath)) {
+            $testState = Get-Content -Raw -LiteralPath $testStatePath | ConvertFrom-Json
+            if ($null -eq $testState.PSObject.Properties['wifiDisabled']) {
+                $testState | Add-Member -NotePropertyName wifiDisabled -NotePropertyValue $Disabled
+            } else {
+                $testState.wifiDisabled = $Disabled
+            }
+            [IO.File]::WriteAllText(
+                $testStatePath,
+                ($testState | ConvertTo-Json -Depth 16),
+                [Text.UTF8Encoding]::new($false))
+        } else {
+            $wifiAdapters = @(Get-NetAdapter -ErrorAction Stop | Where-Object {
+                $_.Name -like '*Wi*' -or
+                $_.InterfaceDescription -like '*Wireless*' -or
+                $_.InterfaceDescription -like '*Wi-Fi*' -or
+                $_.InterfaceDescription -like '*WLAN*'
+            })
+            foreach ($adapter in $wifiAdapters) {
+                if ($Disabled -and $adapter.Status -eq 'Up') {
+                    Disable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+                } elseif (-not $Disabled -and $adapter.Status -ne 'Up') {
+                    Enable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+                }
+            }
+        }
+
+        [void]$script:JsonResult.steps.Add([ordered]@{
+            name = $StepName
+            critical = $Critical
+            exitCode = 0
+            timedOut = $false
+            error = $null
+        })
+    } catch {
+        [void]$script:JsonResult.steps.Add([ordered]@{
+            name = $StepName
+            critical = $Critical
+            exitCode = 1
+            timedOut = $false
+            error = $_.Exception.Message
+        })
+    }
+}
+
 function Get-JsonDetectedMode {
     param([string]$Guid)
 
@@ -1162,7 +1244,7 @@ function Get-JsonPowerModeState {
         sleepTimeoutDcSeconds = $sleepDc
         hibernateTimeoutAcSeconds = $hibernateAc
         hibernateTimeoutDcSeconds = $hibernateDc
-        wifiDisabled = $null
+        wifiDisabled = Get-JsonWifiDisabled
     }
 }
 
@@ -1283,32 +1365,42 @@ function Invoke-JsonApplyCustom {
     $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CustomProfileBase64))
     $profile = $json | ConvertFrom-Json
     $name = [string](Get-JsonProfileValue $profile 'name' (Get-JsonProfileValue $profile 'Name' 'Custom'))
-    $cpuMaximum = [int](Get-JsonProfileValue $profile 'cpuMax' (Get-JsonProfileValue $profile 'CpuMax' 50))
-    $cpuMinimum = [int](Get-JsonProfileValue $profile 'cpuMin' (Get-JsonProfileValue $profile 'CpuMin' 5))
-    $brightness = [int](Get-JsonProfileValue $profile 'brightness' (Get-JsonProfileValue $profile 'Brightness' 50))
-    $displayTimeout = [int](Get-JsonProfileValue $profile 'displayOffSeconds' (Get-JsonProfileValue $profile 'DisplayOffSeconds' 60))
-    $disableBoost = [bool](Get-JsonProfileValue $profile 'disableBoost' (Get-JsonProfileValue $profile 'DisableBoost' $true))
+    $cpuMaximumAc = [int](Get-JsonProfileValue $profile 'cpuMaximumAcPercent' 50)
+    $cpuMaximumDc = [int](Get-JsonProfileValue $profile 'cpuMaximumDcPercent' 50)
+    $cpuMinimum = [int](Get-JsonProfileValue $profile 'cpuMinimumPercent' 5)
+    $brightnessAc = [int](Get-JsonProfileValue $profile 'brightnessAcPercent' 50)
+    $brightnessDc = [int](Get-JsonProfileValue $profile 'brightnessDcPercent' 50)
+    $displayTimeoutAc = [int](Get-JsonProfileValue $profile 'displayTimeoutAcSeconds' 60)
+    $displayTimeoutDc = [int](Get-JsonProfileValue $profile 'displayTimeoutDcSeconds' 60)
+    $disableBoost = [bool](Get-JsonProfileValue $profile 'disableBoost' $true)
     $guid = $GUID_SAVER
 
     $script:JsonResult.requestedMode = "custom:$name"
     Set-ActivePlan $guid
-    Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonCpuMaximum $cpuMaximum 'cpu-maximum' $true
+    Set-PowerValue $guid $JsonCpuSubgroup $JsonCpuMaximum $cpuMaximumAc 'cpu-maximum' $true
+    Set-PowerValueDc $guid $JsonCpuSubgroup $JsonCpuMaximum $cpuMaximumDc 'cpu-maximum-dc' $true
     Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonCpuMinimum $cpuMinimum 'cpu-minimum' $true
-    Set-JsonPowerValue $guid $JsonVideoSubgroup $JsonBrightness $brightness 'brightness' $false
-    Set-JsonPowerValue $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeout 'display-timeout' $true
+    Set-PowerValue $guid $JsonVideoSubgroup $JsonBrightness $brightnessAc 'brightness' $false
+    Set-PowerValueDc $guid $JsonVideoSubgroup $JsonBrightness $brightnessDc 'brightness-dc' $false
+    Set-PowerValue $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeoutAc 'display-timeout' $true
+    Set-PowerValueDc $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeoutDc 'display-timeout-dc' $true
     if ($disableBoost) {
         Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonBoostMode 0 'processor-boost' $true
     }
 
     Add-JsonExpectation 'activeSchemeId' $guid $true
-    Add-JsonExpectation 'cpuMaximumAcPercent' $cpuMaximum $true
-    Add-JsonExpectation 'cpuMaximumDcPercent' $cpuMaximum $true
+    Add-JsonExpectation 'cpuMaximumAcPercent' $cpuMaximumAc $true
+    Add-JsonExpectation 'cpuMaximumDcPercent' $cpuMaximumDc $true
     Add-JsonExpectation 'cpuMinimumAcPercent' $cpuMinimum $true
     Add-JsonExpectation 'cpuMinimumDcPercent' $cpuMinimum $true
-    Add-JsonExpectation 'brightnessAcPercent' $brightness $false
-    Add-JsonExpectation 'brightnessDcPercent' $brightness $false
-    Add-JsonExpectation 'displayTimeoutAcSeconds' $displayTimeout $true
-    Add-JsonExpectation 'displayTimeoutDcSeconds' $displayTimeout $true
+    Add-JsonExpectation 'brightnessAcPercent' $brightnessAc $false
+    Add-JsonExpectation 'brightnessDcPercent' $brightnessDc $false
+    Add-JsonExpectation 'displayTimeoutAcSeconds' $displayTimeoutAc $true
+    Add-JsonExpectation 'displayTimeoutDcSeconds' $displayTimeoutDc $true
+    if ($disableBoost) {
+        Add-JsonExpectation 'processorBoostModeAc' 0 $true
+        Add-JsonExpectation 'processorBoostModeDc' 0 $true
+    }
 }
 
 function Invoke-JsonRestore {
@@ -1324,6 +1416,10 @@ function Invoke-JsonRestore {
     $restoreFields = @(
         @('cpuMaximumAcPercent', $JsonCpuSubgroup, $JsonCpuMaximum, 'cpu-maximum', $true),
         @('cpuMaximumDcPercent', $JsonCpuSubgroup, $JsonCpuMaximum, 'cpu-maximum-dc', $true),
+        @('cpuMinimumAcPercent', $JsonCpuSubgroup, $JsonCpuMinimum, 'cpu-minimum', $true),
+        @('cpuMinimumDcPercent', $JsonCpuSubgroup, $JsonCpuMinimum, 'cpu-minimum-dc', $true),
+        @('processorBoostModeAc', $JsonCpuSubgroup, $JsonBoostMode, 'processor-boost', $true),
+        @('processorBoostModeDc', $JsonCpuSubgroup, $JsonBoostMode, 'processor-boost-dc', $true),
         @('brightnessAcPercent', $JsonVideoSubgroup, $JsonBrightness, 'brightness', $false),
         @('brightnessDcPercent', $JsonVideoSubgroup, $JsonBrightness, 'brightness-dc', $false),
         @('displayTimeoutAcSeconds', $JsonVideoSubgroup, $JsonDisplayTimeout, 'display-timeout', $true),
@@ -1337,13 +1433,19 @@ function Invoke-JsonRestore {
     foreach ($field in $restoreFields) {
         $value = Get-JsonProfileValue $snapshot $field[0]
         if ($null -ne $value) {
-            if ($field[0].EndsWith('DcPercent') -or $field[0].EndsWith('DcSeconds')) {
+            if ($field[0] -match 'Dc(Percent|Seconds)?$') {
                 $null = Set-PowerValueDc $guid $field[1] $field[2] $value $field[3] $field[4]
             } else {
                 $null = Set-PowerValue $guid $field[1] $field[2] $value $field[3] $field[4]
             }
             Add-JsonExpectation $field[0] $value $field[4]
         }
+    }
+
+    $wifiDisabled = Get-JsonProfileValue $snapshot 'wifiDisabled'
+    if ($null -ne $wifiDisabled) {
+        Set-JsonWifiDisabled ([bool]$wifiDisabled) 'wifi-state' $false
+        Add-JsonExpectation 'wifiDisabled' ([bool]$wifiDisabled) $false
     }
 }
 
@@ -1415,6 +1517,11 @@ function Invoke-JsonOperation {
                 error = "Unsupported mode: $Mode"
             })
         }
+    }
+
+    if ($action -eq 'apply' -and $DisableWifi) {
+        Set-JsonWifiDisabled $true 'wifi-disable' $false
+        Add-JsonExpectation 'wifiDisabled' $true $false
     }
 
     $script:JsonResult.afterState = Get-JsonPowerModeState

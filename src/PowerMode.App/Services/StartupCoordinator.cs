@@ -14,6 +14,8 @@ internal interface IStartupCoordinator
 
     Task ResumeAfterRecoveryAsync(
         CancellationToken cancellationToken = default);
+
+    void AcceptRecoveredSettings(SettingsLoadResult recovered);
 }
 
 internal sealed class StartupCoordinator : IStartupCoordinator
@@ -24,6 +26,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
     private readonly SemaphoreSlim _gate = new(1, 1);
     private SettingsLoadResult? _settingsLoad;
     private StartupInitializationResult? _initializationResult;
+    private PowerModeState? _launchState;
     private bool _activationCompleted;
 
     public StartupCoordinator(
@@ -61,22 +64,34 @@ internal sealed class StartupCoordinator : IStartupCoordinator
                     $"The last-operation journal could not be read: {journal.Error}"));
             }
 
+            try
+            {
+                var reality = await _backend.ReadStateAsync(
+                    journal.Record?.OperationId ?? Guid.NewGuid(),
+                    cancellationToken).ConfigureAwait(false);
+                _launchState = reality.State;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return Remember(new(true, journal.Record, null, Bound(exception.Message)));
+            }
+
+            if (_launchState is null)
+            {
+                return Remember(new(
+                    true,
+                    journal.Record,
+                    null,
+                    "The typed launch power state could not be captured reliably."));
+            }
+
             if (journal.Record is { } record && IsRecoveryPending(record.Status))
             {
-                try
-                {
-                    var reality = await _backend.ReadStateAsync(
-                        record.OperationId,
-                        cancellationToken).ConfigureAwait(false);
-                    var error = reality.State is null
-                        ? "Recovery is required, but the current power state could not be read."
-                        : "Recovery is required before normal startup activation can continue.";
-                    return Remember(new(true, record, reality.State, error));
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    return Remember(new(true, record, null, Bound(exception.Message)));
-                }
+                return Remember(new(
+                    true,
+                    record,
+                    _launchState,
+                    "Recovery is required before normal startup activation can continue."));
             }
 
             if (!settingsLoad.AllowsExternalSideEffects)
@@ -84,7 +99,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
                 return Remember(new(
                     true,
                     journal.Record,
-                    null,
+                    _launchState,
                     "Settings are corrupt; startup activation is disabled until recovery completes."));
             }
 
@@ -94,7 +109,7 @@ internal sealed class StartupCoordinator : IStartupCoordinator
             return Remember(new(
                 activationError is not null,
                 journal.Record,
-                null,
+                _launchState,
                 activationError));
         }
         finally
@@ -126,6 +141,15 @@ internal sealed class StartupCoordinator : IStartupCoordinator
                 throw new InvalidOperationException(
                     "The last operation still requires verification or restoration.");
 
+            if (_launchState is null)
+            {
+                var reality = await _backend.ReadStateAsync(
+                    journal.Record?.OperationId ?? Guid.NewGuid(),
+                    cancellationToken).ConfigureAwait(false);
+                _launchState = reality.State ?? throw new IOException(
+                    "The typed launch power state could not be captured reliably.");
+            }
+
             var error = await ActivateOnceAsync(_settingsLoad, cancellationToken)
                 .ConfigureAwait(false);
             if (error is not null)
@@ -135,6 +159,15 @@ internal sealed class StartupCoordinator : IStartupCoordinator
         {
             _gate.Release();
         }
+    }
+
+    public void AcceptRecoveredSettings(SettingsLoadResult recovered)
+    {
+        ArgumentNullException.ThrowIfNull(recovered);
+        if (!recovered.AllowsExternalSideEffects)
+            throw new InvalidOperationException(
+                "Recovered settings must be usable before startup can resume.");
+        _settingsLoad = recovered;
     }
 
     private async Task<string?> ActivateOnceAsync(

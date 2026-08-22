@@ -41,6 +41,30 @@ public sealed class LastOperationStoreTests
         Assert.Equal(current, (await store.ReadAsync()).Record);
     }
 
+    [Theory]
+    [InlineData((int)LastOperationStatus.Prepared)]
+    [InlineData((int)LastOperationStatus.Applying)]
+    [InlineData((int)LastOperationStatus.Uncertain)]
+    public async Task WriteAsync_NewPreparedRecordNeverOverwritesUnresolvedRecord(
+        int statusValue)
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new LastOperationStore(
+            Path.Combine(directory.Path, "last-operation.json"));
+        var current = JournalRecords.Prepared(Guid.NewGuid()) with
+        {
+            Status = (LastOperationStatus)statusValue
+        };
+        await store.WriteAsync(current);
+
+        var result = await store.WriteAsync(
+            JournalRecords.Prepared(Guid.NewGuid()));
+
+        Assert.False(result.Succeeded);
+        Assert.True(result.Conflict);
+        Assert.Equal(current, (await store.ReadAsync()).Record);
+    }
+
     [Fact]
     public async Task ReadAsync_MalformedJsonReturnsErrorWithoutDeletingFile()
     {

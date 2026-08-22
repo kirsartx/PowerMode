@@ -134,13 +134,24 @@ internal sealed class LastOperationStore : ILastOperationStore
         var temporaryPath = FilePath + $".{Guid.NewGuid():N}.tmp";
         try
         {
-            if (expectedOperationId.HasValue)
+            if (expectedOperationId.HasValue || record.Status == LastOperationStatus.Prepared)
             {
                 var current = await ReadUnlockedAsync(cancellationToken).ConfigureAwait(false);
                 if (!current.Succeeded)
                     return new(false, false, current.Error);
-                if (current.Record?.OperationId != expectedOperationId)
+                if (expectedOperationId.HasValue &&
+                    current.Record?.OperationId != expectedOperationId)
                     return new(Succeeded: false, Conflict: true, Error: "Last operation changed.");
+                if (!expectedOperationId.HasValue &&
+                    current.Record is { } unresolved &&
+                    unresolved.OperationId != record.OperationId &&
+                    IsRecoveryPending(unresolved.Status))
+                {
+                    return new(
+                        Succeeded: false,
+                        Conflict: true,
+                        Error: "An unresolved last operation must be recovered first.");
+                }
             }
 
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -208,6 +219,11 @@ internal sealed class LastOperationStore : ILastOperationStore
             return new(null, exception.Message);
         }
     }
+
+    private static bool IsRecoveryPending(LastOperationStatus status) =>
+        status is LastOperationStatus.Prepared or
+            LastOperationStatus.Applying or
+            LastOperationStatus.Uncertain;
 
     private sealed record LastOperationDto
     {

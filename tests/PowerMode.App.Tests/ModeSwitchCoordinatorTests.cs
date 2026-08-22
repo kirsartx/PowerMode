@@ -68,12 +68,16 @@ public sealed class ModeSwitchCoordinatorTests
         var before = backend.BalancedState();
         backend.Reads.Enqueue(backend.ReadResult(backend.MismatchedRemoteState()));
         backend.Restores.Enqueue(backend.Operation("restore", BackendOperationOutcome.Failed, before));
-        var coordinator = TestCoordinator.Create(backend);
+        var journal = new RecordingLastOperationStore();
+        var coordinator = TestCoordinator.Create(backend, journal);
 
         var result = await coordinator.TrySwitchAsync(Requests.Remote());
+        Assert.Equal(LastOperationStatus.Uncertain, journal.Current!.Status);
+        journal.Current = journal.Current with { Status = LastOperationStatus.Verified };
 
         Assert.Equal(ModeSwitchOutcome.RollbackFailed, result!.Outcome);
         Assert.False(result.Rollback!.Succeeded);
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
     }
 
     [Fact]
@@ -131,6 +135,40 @@ public sealed class ModeSwitchCoordinatorTests
         Assert.Equal(1, backend.ApplyCount);
     }
 
+    [Theory]
+    [InlineData((int)LastOperationStatus.Prepared)]
+    [InlineData((int)LastOperationStatus.Applying)]
+    [InlineData((int)LastOperationStatus.Uncertain)]
+    public async Task TrySwitchAsync_ColdStartUnresolvedJournalBlocksBeforeStateRead(
+        int statusValue)
+    {
+        var backend = ScenarioBackend.ForRemote(cpu: 31);
+        var journal = new RecordingLastOperationStore
+        {
+            Current = JournalRecord((LastOperationStatus)statusValue, backend.BalancedState())
+        };
+        var coordinator = TestCoordinator.Create(backend, journal);
+
+        var result = await coordinator.TrySwitchAsync(Requests.Remote());
+
+        Assert.Null(result);
+        Assert.Equal(0, backend.ReadCount);
+        Assert.Equal(0, backend.ApplyCount);
+        Assert.Empty(journal.Writes);
+    }
+
+    [Fact]
+    public async Task TrySwitchAsync_JournalReadErrorBlocksBeforeStateRead()
+    {
+        var backend = ScenarioBackend.ForRemote(cpu: 31);
+        var journal = new RecordingLastOperationStore { ReadError = "journal unreadable" };
+        var coordinator = TestCoordinator.Create(backend, journal);
+
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Remote()));
+        Assert.Equal(0, backend.ReadCount);
+        Assert.Equal(0, backend.ApplyCount);
+    }
+
     [Fact]
     public async Task TrySwitchAsync_PreMutationCancellationReturnsCancelled()
     {
@@ -184,6 +222,25 @@ public sealed class ModeSwitchCoordinatorTests
     }
 
     [Fact]
+    public async Task TrySwitchAsync_PreparedConflictRequiresRecoveryAndLatchesGate()
+    {
+        var backend = ScenarioBackend.ForRemote(cpu: 31);
+        var journal = new RecordingLastOperationStore
+        {
+            WriteResults = new Queue<LastOperationWriteResult>([
+                new(false, true, "unresolved operation appeared")])
+        };
+        var coordinator = TestCoordinator.Create(backend, journal);
+
+        var result = await coordinator.TrySwitchAsync(Requests.Remote());
+
+        Assert.True(result!.RequiresRecovery);
+        Assert.Contains("unresolved", result.JournalError!);
+        Assert.Equal(0, backend.ApplyCount);
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
+    }
+
+    [Fact]
     public async Task TrySwitchAsync_ApplyingWriteFailureNeverMutatesBackend()
     {
         var backend = ScenarioBackend.ForRemote(cpu: 31);
@@ -220,6 +277,59 @@ public sealed class ModeSwitchCoordinatorTests
         Assert.True(result!.RequiresRecovery);
         Assert.Equal(LastOperationStatus.Applying, journal.Writes[^1].Status);
         Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
+    }
+
+    [Fact]
+    public async Task RestoreBeforeStateAsync_UnconfirmedRestoreLatchesRecovery()
+    {
+        var backend = new ScenarioBackend();
+        var before = backend.BalancedState();
+        backend.Restores.Enqueue(backend.Operation(
+            "restore",
+            BackendOperationOutcome.Succeeded,
+            before));
+        backend.Reads.Enqueue(backend.ReadResult(before with { CpuMinimumDcPercent = 99 }));
+        var journal = new RecordingLastOperationStore
+        {
+            Current = JournalRecord(LastOperationStatus.Applying, before)
+        };
+        var coordinator = TestCoordinator.Create(backend, journal);
+
+        var restore = await coordinator.RestoreBeforeStateAsync(journal.Current.OperationId);
+        Assert.Equal(LastOperationStatus.Uncertain, journal.Current!.Status);
+        journal.Current = journal.Current with { Status = LastOperationStatus.Verified };
+
+        Assert.False(restore.Succeeded);
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
+    }
+
+    [Fact]
+    public async Task TrySwitchAsync_CustomBoostExpectationMatchesEngineContract()
+    {
+        var backend = new ScenarioBackend();
+        var profile = new CustomPowerProfileSnapshot(
+            "Quiet", 45, 35, 5, 65, 45, 300, 120, true);
+        var request = new ModeSwitchRequest(
+            Guid.Parse("77777777-7777-7777-7777-777777777777"),
+            PowerModeTarget.ForCustom(profile),
+            null,
+            false,
+            "custom-test",
+            "custom contract");
+        var after = backend.CustomState(profile);
+        backend.Reads.Enqueue(backend.ReadResult(backend.BalancedState()));
+        backend.Applies.Enqueue(backend.Operation(
+            "apply",
+            BackendOperationOutcome.Succeeded,
+            after,
+            request.Target.Key,
+            CustomExpectations(profile)));
+        backend.Reads.Enqueue(backend.ReadResult(after));
+
+        var result = await TestCoordinator.Create(backend).TrySwitchAsync(request);
+
+        Assert.Equal(ModeSwitchOutcome.Succeeded, result!.Outcome);
+        Assert.Null(result.Rollback);
     }
 
     [Fact]
@@ -274,6 +384,20 @@ public sealed class ModeSwitchCoordinatorTests
         }
     }
 
+    private static LastOperationRecord JournalRecord(
+        LastOperationStatus status,
+        PowerModeState beforeState) => new(
+        1,
+        Guid.Parse("99999999-9999-9999-9999-999999999999"),
+        "test",
+        "pending operation",
+        PowerModeTarget.ForPreset(PowerModePreset.Remote),
+        31,
+        false,
+        DateTimeOffset.Parse("2026-08-22T12:00:00Z"),
+        beforeState,
+        status);
+
     private sealed class ScenarioBackend : IPowerModeBackend
     {
         private readonly bool _blockApply;
@@ -287,6 +411,7 @@ public sealed class ModeSwitchCoordinatorTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int ApplyCount { get; private set; }
         public int RestoreCount { get; private set; }
+        public int ReadCount { get; private set; }
 
         public ScenarioBackend(bool blockApply = false)
         {
@@ -309,10 +434,13 @@ public sealed class ModeSwitchCoordinatorTests
             return backend;
         }
 
-        public PowerModeStateResult ReadState(Guid operationId = default, CancellationToken cancellationToken = default) =>
-            Reads.Count > 0
+        public PowerModeStateResult ReadState(Guid operationId = default, CancellationToken cancellationToken = default)
+        {
+            ReadCount++;
+            return Reads.Count > 0
                 ? Reads.Dequeue()
                 : ReadResult(RemoteState(31));
+        }
 
         public Task<PowerModeStateResult> ReadStateAsync(Guid operationId, CancellationToken cancellationToken = default) =>
             Task.FromResult(ReadState(operationId, cancellationToken));
@@ -381,6 +509,20 @@ public sealed class ModeSwitchCoordinatorTests
 
         public PowerModeState MismatchedRemoteState() => RemoteState(88);
 
+        public PowerModeState CustomState(CustomPowerProfileSnapshot profile) => State(
+            Guid.Parse("a1841308-3541-4fab-bc81-f71556f20b4a"),
+            PowerModePreset.Remote,
+            profile.CpuMaximumAcPercent,
+            profile.CpuMaximumDcPercent,
+            profile.CpuMinimumPercent,
+            profile.CpuMinimumPercent,
+            profile.BrightnessAcPercent,
+            profile.BrightnessDcPercent,
+            profile.DisplayTimeoutAcSeconds,
+            profile.DisplayTimeoutDcSeconds,
+            boostAc: profile.DisableBoost ? 0 : null,
+            boostDc: profile.DisableBoost ? 0 : null);
+
         public PowerModeState State(
             Guid scheme,
             PowerModePreset preset,
@@ -392,7 +534,9 @@ public sealed class ModeSwitchCoordinatorTests
             int brightnessDc,
             int? displayAc,
             int? displayDc,
-            int? cpuMinimumOverride = null) => new(
+            int? cpuMinimumOverride = null,
+            int? boostAc = null,
+            int? boostDc = null) => new(
             scheme,
             preset.ToString(),
             preset,
@@ -402,8 +546,8 @@ public sealed class ModeSwitchCoordinatorTests
             cpuDc,
             cpuMinimumOverride ?? minimumAc,
             minimumDc,
-            null,
-            null,
+            boostAc,
+            boostDc,
             brightnessAc,
             brightnessDc,
             displayAc,
@@ -437,10 +581,11 @@ public sealed class ModeSwitchCoordinatorTests
     {
         public List<LastOperationRecord> Writes { get; } = [];
         public Queue<LastOperationWriteResult> WriteResults { get; set; } = new();
-        public LastOperationRecord? Current { get; private set; }
+        public LastOperationRecord? Current { get; set; }
+        public string? ReadError { get; set; }
 
         public Task<LastOperationReadResult> ReadAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new LastOperationReadResult(Current, null));
+            Task.FromResult(new LastOperationReadResult(Current, ReadError));
 
         public Task<LastOperationWriteResult> WriteAsync(
             LastOperationRecord record,
@@ -486,6 +631,22 @@ public sealed class ModeSwitchCoordinatorTests
         Expect(PowerModeStateField.SleepTimeoutDcSeconds, "0", true),
         Expect(PowerModeStateField.HibernateTimeoutAcSeconds, "0", true),
         Expect(PowerModeStateField.HibernateTimeoutDcSeconds, "0", true)
+    ];
+
+    private static IReadOnlyList<VerificationExpectation> CustomExpectations(
+        CustomPowerProfileSnapshot profile) =>
+    [
+        Expect(PowerModeStateField.ActiveSchemeId, "a1841308-3541-4fab-bc81-f71556f20b4a", true),
+        Expect(PowerModeStateField.CpuMaximumAcPercent, profile.CpuMaximumAcPercent.ToString(), true),
+        Expect(PowerModeStateField.CpuMaximumDcPercent, profile.CpuMaximumDcPercent.ToString(), true),
+        Expect(PowerModeStateField.CpuMinimumAcPercent, profile.CpuMinimumPercent.ToString(), true),
+        Expect(PowerModeStateField.CpuMinimumDcPercent, profile.CpuMinimumPercent.ToString(), true),
+        Expect(PowerModeStateField.ProcessorBoostModeAc, "0", true),
+        Expect(PowerModeStateField.ProcessorBoostModeDc, "0", true),
+        Expect(PowerModeStateField.BrightnessAcPercent, profile.BrightnessAcPercent.ToString(), false),
+        Expect(PowerModeStateField.BrightnessDcPercent, profile.BrightnessDcPercent.ToString(), false),
+        Expect(PowerModeStateField.DisplayTimeoutAcSeconds, profile.DisplayTimeoutAcSeconds.ToString(), true),
+        Expect(PowerModeStateField.DisplayTimeoutDcSeconds, profile.DisplayTimeoutDcSeconds.ToString(), true)
     ];
 
     private static VerificationExpectation Expect(

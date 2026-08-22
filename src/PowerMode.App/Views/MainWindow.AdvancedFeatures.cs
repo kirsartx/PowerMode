@@ -152,11 +152,9 @@ public sealed partial class MainWindow
                 createSafetyBackup: true,
                 token),
             token =>
-            {
-                token.ThrowIfCancellationRequested();
-                ApplyFeatureSettings(SettingsStore.LoadStrict());
-                return Task.CompletedTask;
-            },
+                AcceptRecoveredSettingsAndResumeStartupAsync(
+                    SettingsStore.Load(),
+                    token),
             async (restoreResult, token) =>
             {
                 var safetyBackup = restoreResult.SafetyBackup
@@ -169,7 +167,9 @@ public sealed partial class MainWindow
                     token);
                 if (!rollback.Succeeded)
                     throw new IOException(rollback.Error ?? "Configuration rollback failed.");
-                ApplyFeatureSettings(SettingsStore.LoadStrict());
+                await AcceptRecoveredSettingsAndResumeStartupAsync(
+                    SettingsStore.Load(),
+                    token);
             },
             cancellationToken);
     }
@@ -186,7 +186,10 @@ public sealed partial class MainWindow
             operationId,
             cancellationToken);
         if (result.MatchesCriticalExpectations)
+        {
+            ClearPersistentRecoveryPresentation();
             await ResumeStartupAfterRecoveryAsync(cancellationToken);
+        }
         return result;
     }
 
@@ -198,7 +201,10 @@ public sealed partial class MainWindow
             operationId,
             cancellationToken);
         if (result.Succeeded)
+        {
+            ClearPersistentRecoveryPresentation();
             await ResumeStartupAfterRecoveryAsync(cancellationToken);
+        }
         return result;
     }
 
@@ -209,19 +215,25 @@ public sealed partial class MainWindow
             return;
         await _startupCoordinator.ResumeAfterRecoveryAsync(cancellationToken);
         _startupActivationDeferred = false;
-        _persistentModeSwitchPresentation = false;
-        StatusBar.IsClosable = true;
         await RefreshStatusAsync();
+    }
+
+    private async Task AcceptRecoveredSettingsAndResumeStartupAsync(
+        SettingsLoadResult recovered,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        AcceptRecoveredSettings(recovered);
+        await ResumeStartupAfterRecoveryAsync(cancellationToken);
     }
 
     internal Task<RecoveryActionResult> ResetSettingsDefaultsAsync(
         CancellationToken cancellationToken) =>
-        GetRecoveryService().ResetDefaultsAsync(token =>
-        {
-            token.ThrowIfCancellationRequested();
-            ApplyFeatureSettings(SettingsStore.LoadStrict());
-            return Task.CompletedTask;
-        }, cancellationToken);
+        GetRecoveryService().ResetDefaultsAsync(
+            token => AcceptRecoveredSettingsAndResumeStartupAsync(
+                SettingsStore.Load(),
+                token),
+            cancellationToken);
 
     private RecoveryService GetRecoveryService() =>
         _recoveryService ?? throw new InvalidOperationException(

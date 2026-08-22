@@ -54,12 +54,21 @@ public sealed partial class MainWindow
 
     internal void AcceptRecoveredSettings(PowerModeSettings settings)
     {
-        _settingsLoadResult = new SettingsLoadResult(
+        AcceptRecoveredSettings(new SettingsLoadResult(
             SettingsLoadState.Loaded,
-            settings);
-        _settingsActivationCoordinator.AcceptRecoveredSettings(_settingsLoadResult);
-        _featureSettings = settings;
-        ApplyFeatureSettings(settings);
+            settings));
+    }
+
+    private void AcceptRecoveredSettings(SettingsLoadResult recovered)
+    {
+        ArgumentNullException.ThrowIfNull(recovered);
+        if (!recovered.AllowsExternalSideEffects)
+            throw new InvalidOperationException("Recovered settings are not usable.");
+        _settingsActivationCoordinator.AcceptRecoveredSettings(recovered);
+        _startupCoordinator.AcceptRecoveredSettings(recovered);
+        _settingsLoadResult = recovered;
+        _featureSettings = recovered.Settings;
+        ApplyFeatureSettings(recovered.Settings);
         StatusBar.Severity = InfoBarSeverity.Success;
         StatusText.Text = IsChinese
             ? "配置已恢复，可继续编辑设置"
@@ -193,16 +202,14 @@ public sealed partial class MainWindow
     {
         if (!_closingAfterRestore &&
             _featureSettings.RestorePlanOnExit &&
-            _startupPowerState?.DetectedMode is { } startupMode)
+            _startupPowerState is { } startupState)
         {
             args.Cancel = true;
             _closingAfterRestore = true;
-            await RunModeWithContextAsync(
-                startupMode.ToString().ToLowerInvariant(),
-                new SwitchRequestContext(
-                    "shutdown",
-                    IsChinese ? "退出时恢复启动模式" : "Restore startup mode on exit",
-                    AllowPreview: false));
+            var restore = await _powerModeBackend.RestoreAsync(
+                Guid.NewGuid(),
+                startupState);
+            AppendBackendDiagnostics(restore);
             Close();
             return;
         }
@@ -266,9 +273,20 @@ public sealed partial class MainWindow
     internal async Task VerifyWithSummaryAsync()
     {
         var availability = await GetRecoveryService().GetLastOperationAvailabilityAsync();
+        if (!string.IsNullOrWhiteSpace(availability.Error))
+        {
+            PresentStartupRecovery(new(
+                true,
+                null,
+                null,
+                availability.Error));
+            return;
+        }
         if (availability.Record is { } record)
         {
-            var result = await GetRecoveryService().VerifyLastOperationAsync(record.OperationId);
+            var result = await VerifyLastOperationAsync(
+                record.OperationId,
+                CancellationToken.None);
             if (result.CurrentState is { } currentState)
                 ApplyPowerModeState(currentState);
             StatusText.Text = result.Error ?? (result.MatchesCriticalExpectations
@@ -277,8 +295,7 @@ public sealed partial class MainWindow
             StatusBar.Severity = result.MatchesCriticalExpectations
                 ? InfoBarSeverity.Success
                 : InfoBarSeverity.Warning;
-            if (result.MatchesCriticalExpectations)
-                await ResumeStartupAfterRecoveryAsync();
+            StatusBar.IsOpen = true;
             return;
         }
 

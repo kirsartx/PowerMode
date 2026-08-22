@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace PowerModeWinUI.Tests;
@@ -94,7 +95,20 @@ public sealed class PowerModeBackendTests
         Assert.True(index >= 0);
         var decoded = Encoding.UTF8.GetString(
             Convert.FromBase64String(request.Arguments[index + 1]));
-        Assert.Contains("Quiet", decoded);
+        using var payload = JsonDocument.Parse(decoded);
+        var root = payload.RootElement;
+        Assert.Equal("Quiet", root.GetProperty("name").GetString());
+        Assert.Equal(45, root.GetProperty("cpuMaximumAcPercent").GetInt32());
+        Assert.Equal(35, root.GetProperty("cpuMaximumDcPercent").GetInt32());
+        Assert.Equal(5, root.GetProperty("cpuMinimumPercent").GetInt32());
+        Assert.Equal(65, root.GetProperty("brightnessAcPercent").GetInt32());
+        Assert.Equal(45, root.GetProperty("brightnessDcPercent").GetInt32());
+        Assert.Equal(300, root.GetProperty("displayTimeoutAcSeconds").GetInt32());
+        Assert.Equal(120, root.GetProperty("displayTimeoutDcSeconds").GetInt32());
+        Assert.True(root.GetProperty("disableBoost").GetBoolean());
+        Assert.False(root.TryGetProperty("cpuMax", out _));
+        Assert.False(root.TryGetProperty("brightness", out _));
+        Assert.False(root.TryGetProperty("displayOffSeconds", out _));
     }
 
     [Fact]
@@ -130,7 +144,20 @@ public sealed class PowerModeBackendTests
 
         var request = Assert.Single(runner.Requests);
         Assert.Equal(TimeSpan.FromSeconds(20), request.Timeout);
-        Assert.Contains("-RestoreSnapshotBase64", request.Arguments);
+        var index = Array.IndexOf(
+            request.Arguments.ToArray(),
+            "-RestoreSnapshotBase64");
+        Assert.True(index >= 0);
+        var decoded = Encoding.UTF8.GetString(
+            Convert.FromBase64String(request.Arguments[index + 1]));
+        using var payload = JsonDocument.Parse(decoded);
+        var root = payload.RootElement;
+        Assert.Equal(100, root.GetProperty("cpuMaximumAcPercent").GetInt32());
+        Assert.Equal(5, root.GetProperty("cpuMinimumDcPercent").GetInt32());
+        Assert.Equal(2, root.GetProperty("processorBoostModeAc").GetInt32());
+        Assert.Equal(100, root.GetProperty("brightnessDcPercent").GetInt32());
+        Assert.Equal(600, root.GetProperty("displayTimeoutAcSeconds").GetInt32());
+        Assert.False(root.GetProperty("wifiDisabled").GetBoolean());
     }
 
     [Fact]

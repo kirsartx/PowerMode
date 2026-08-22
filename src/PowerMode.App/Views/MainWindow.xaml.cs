@@ -523,6 +523,19 @@ public sealed partial class MainWindow : Window
         CopyModeSwitchDiagnosticButton.Visibility = Visibility.Collapsed;
     }
 
+    private void ClearPersistentRecoveryPresentation()
+    {
+        _persistentModeSwitchPresentation = false;
+        _lastModeSwitchResult = null;
+        _statusAction = ModeSwitchPresentationAction.None;
+        StatusBar.IsClosable = true;
+        StatusBar.IsOpen = false;
+        StatusActionButton.Visibility = Visibility.Collapsed;
+        ModeSwitchDiagnosticText.Text = string.Empty;
+        ModeSwitchDiagnosticText.Visibility = Visibility.Collapsed;
+        CopyModeSwitchDiagnosticButton.Visibility = Visibility.Collapsed;
+    }
+
     private async void StatusActionButton_Click(object sender, RoutedEventArgs e)
     {
         if (_statusAction == ModeSwitchPresentationAction.OpenRecoveryCenter)

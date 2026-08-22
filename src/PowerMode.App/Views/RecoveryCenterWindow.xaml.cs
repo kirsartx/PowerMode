@@ -9,6 +9,7 @@ public sealed partial class RecoveryCenterWindow : Window
     private readonly MainWindow _owner;
     private readonly bool _isChinese;
     private LastOperationAvailability? _lastOperationAvailability;
+    private RecoveryBackupAvailability? _backupAvailability;
     private ConfigurationBackupInfo? _latestBackup;
     private readonly CancellationTokenSource _lifetimeCancellation;
     private bool _busy;
@@ -92,6 +93,7 @@ public sealed partial class RecoveryCenterWindow : Window
         if (!TryUpdatePresentation(() =>
             {
                 _lastOperationAvailability = null;
+                _backupAvailability = null;
                 _latestBackup = null;
                 SetBusy(
                     true,
@@ -102,39 +104,50 @@ public sealed partial class RecoveryCenterWindow : Window
             }))
             return;
 
-        var lastOperationAvailability = default(LastOperationAvailability);
-        var backupAvailability = default(RecoveryBackupAvailability);
+        LastOperationAvailability? lastOperationAvailability;
+        RecoveryBackupAvailability backupAvailability;
         try
         {
             lastOperationAvailability = await _owner.GetLastOperationAvailabilityAsync(
                 _lifetimeCancellation.Token);
-            _lifetimeCancellation.Token.ThrowIfCancellationRequested();
-            backupAvailability = _owner.GetLatestDistinctSettingsBackup();
-            if (!string.IsNullOrWhiteSpace(backupAvailability.Error))
-                throw new IOException(backupAvailability.Error);
-            TryUpdatePresentation(() =>
-            {
-                _lastOperationAvailability = lastOperationAvailability;
-                _latestBackup = backupAvailability.Backup;
-                RenderAvailability();
-            });
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
+            return;
         }
         catch (Exception ex)
         {
-            TryUpdatePresentation(() =>
-                ShowResult(
-                    FormatFailure(
-                        _isChinese ? "读取恢复状态失败" : "Could not read recovery state",
-                        ex),
-                    InfoBarSeverity.Error));
+            lastOperationAvailability = new(
+                null,
+                false,
+                false,
+                FormatFailure(
+                    _isChinese ? "读取电源恢复状态失败" : "Could not read power recovery state",
+                    ex));
         }
-        finally
+
+        _lifetimeCancellation.Token.ThrowIfCancellationRequested();
+        try
         {
-            TryUpdatePresentation(() => SetBusy(false));
+            backupAvailability = _owner.GetLatestDistinctSettingsBackup();
         }
+        catch (Exception ex)
+        {
+            backupAvailability = new(
+                null,
+                FormatFailure(
+                    _isChinese ? "读取配置备份失败" : "Could not read configuration backups",
+                    ex));
+        }
+
+        TryUpdatePresentation(() =>
+        {
+            _lastOperationAvailability = lastOperationAvailability;
+            _backupAvailability = backupAvailability;
+            _latestBackup = backupAvailability.Backup;
+            RenderAvailability();
+            SetBusy(false);
+        });
     }
 
     private void RenderAvailability()
@@ -162,7 +175,9 @@ public sealed partial class RecoveryCenterWindow : Window
                 $"{(_isChinese ? "原因" : "Reason")}: {reason}\n" +
                 $"{(_isChinese ? "状态" : "Status")}: {record.Status}";
         }
-        RestoreAvailabilityText.Text = _latestBackup is null
+        RestoreAvailabilityText.Text = !string.IsNullOrWhiteSpace(_backupAvailability?.Error)
+            ? _backupAvailability.Error
+            : _latestBackup is null
             ? (_isChinese
                 ? "没有与当前设置不同的配置备份。"
                 : "No configuration backup differs from current settings.")

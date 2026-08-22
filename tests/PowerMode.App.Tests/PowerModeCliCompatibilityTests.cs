@@ -8,11 +8,24 @@ public sealed class PowerModeCliCompatibilityTests
 {
     private static class KnownPowerSettings
     {
+        public const string CpuSubgroup =
+            "54533251-82be-4824-96c1-47b60b740d00";
+        public const string VideoSubgroup =
+            "7516b95f-f776-4464-8c53-06167f40cc99";
         public const string CpuMaximum =
             "bc5038f7-23e0-4960-96da-33abaf5935ec";
+        public const string CpuMinimum =
+            "893dee8e-2bef-41e0-89c6-b55d0929964c";
+        public const string ProcessorBoost =
+            "be337238-0d82-4146-a960-4f3749d470c7";
         public const string Brightness =
             "aded5e82-b909-4619-9949-f5d71dac0bcb";
+        public const string DisplayTimeout =
+            "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e";
     }
+
+    private const string SaverScheme =
+        "a1841308-3541-4fab-bc81-f71556f20b4a";
 
     [Fact]
     public void BatLauncher_IsThinAndUsesSiblingEngine()
@@ -143,18 +156,20 @@ public sealed class PowerModeCliCompatibilityTests
     }
 
     [Fact]
-    public async Task Engine_JsonCustomProfile_VerifiesOnlyCustomFields()
+    public async Task Engine_JsonCustomProfile_AppliesTypedAcDcValuesExactly()
     {
         using var state = FakePowerState.CreateBalanced();
         var profile = Encode("""
             {
               "name": "Quiet",
-              "cpuMax": 45,
-              "cpuMin": 5,
-              "brightness": 65,
-              "displayOffSeconds": 300,
-              "disableBoost": true,
-              "useSeparateBatteryValues": false
+              "cpuMaximumAcPercent": 45,
+              "cpuMaximumDcPercent": 35,
+              "cpuMinimumPercent": 5,
+              "brightnessAcPercent": 65,
+              "brightnessDcPercent": 45,
+              "displayTimeoutAcSeconds": 300,
+              "displayTimeoutDcSeconds": 120,
+              "disableBoost": true
             }
             """);
         var result = await RunEngineAsync(
@@ -164,8 +179,19 @@ public sealed class PowerModeCliCompatibilityTests
             "-CustomProfileBase64", profile);
 
         var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        using var saved = JsonDocument.Parse(File.ReadAllText(state.Path));
         Assert.Equal(BackendOperationOutcome.Succeeded, contract.Outcome);
         Assert.Equal("custom:Quiet", contract.RequestedTargetKey);
+        Assert.Equal(45, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMaximum, "ac"));
+        Assert.Equal(35, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMaximum, "dc"));
+        Assert.Equal(5, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMinimum, "ac"));
+        Assert.Equal(5, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMinimum, "dc"));
+        Assert.Equal(0, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.ProcessorBoost, "ac"));
+        Assert.Equal(0, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.ProcessorBoost, "dc"));
+        Assert.Equal(65, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.Brightness, "ac"));
+        Assert.Equal(45, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.Brightness, "dc"));
+        Assert.Equal(300, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.DisplayTimeout, "ac"));
+        Assert.Equal(120, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.DisplayTimeout, "dc"));
         Assert.DoesNotContain(
             contract.Expectations,
             expectation => expectation.Field is
@@ -175,7 +201,12 @@ public sealed class PowerModeCliCompatibilityTests
                 PowerModeStateField.HibernateTimeoutDcSeconds);
         Assert.Contains(
             contract.Expectations,
-            expectation => expectation.Field == PowerModeStateField.DisplayTimeoutAcSeconds);
+            expectation => expectation.Field == PowerModeStateField.DisplayTimeoutDcSeconds &&
+                expectation.ExpectedValue == "120");
+        Assert.Contains(
+            contract.Expectations,
+            expectation => expectation.Field == PowerModeStateField.ProcessorBoostModeAc &&
+                expectation.ExpectedValue == "0");
     }
 
     [Fact]
@@ -187,6 +218,10 @@ public sealed class PowerModeCliCompatibilityTests
               "activeSchemeId": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
               "cpuMaximumAcPercent": 77,
               "cpuMaximumDcPercent": 76,
+              "cpuMinimumAcPercent": 7,
+              "cpuMinimumDcPercent": 6,
+              "processorBoostModeAc": 2,
+              "processorBoostModeDc": 1,
               "brightnessAcPercent": 61,
               "brightnessDcPercent": 60,
               "displayTimeoutAcSeconds": 321,
@@ -194,7 +229,8 @@ public sealed class PowerModeCliCompatibilityTests
               "sleepTimeoutAcSeconds": 11,
               "sleepTimeoutDcSeconds": 12,
               "hibernateTimeoutAcSeconds": 13,
-              "hibernateTimeoutDcSeconds": 14
+              "hibernateTimeoutDcSeconds": 14,
+              "wifiDisabled": true
             }
             """);
         var result = await RunEngineAsync(
@@ -205,13 +241,36 @@ public sealed class PowerModeCliCompatibilityTests
 
         var contract = PowerModeEngineContract.Parse(result.StandardOutput);
         var saved = JsonDocument.Parse(File.ReadAllText(state.Path));
-        Assert.Equal(BackendOperationOutcome.Succeeded, contract.Outcome);
-        Assert.Equal(0, result.ExitCode);
         Assert.Equal(
             "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
             saved.RootElement.GetProperty("activeSchemeId").GetString());
-        Assert.Contains("77", saved.RootElement.ToString());
-        Assert.Contains("321", saved.RootElement.ToString());
+        const string scheme = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
+        Assert.Equal(77, SavedValue(saved, scheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMaximum, "ac"));
+        Assert.Equal(76, SavedValue(saved, scheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMaximum, "dc"));
+        Assert.Equal(7, SavedValue(saved, scheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMinimum, "ac"));
+        Assert.Equal(6, SavedValue(saved, scheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.CpuMinimum, "dc"));
+        Assert.Equal(2, SavedValue(saved, scheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.ProcessorBoost, "ac"));
+        Assert.Equal(1, SavedValue(saved, scheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.ProcessorBoost, "dc"));
+        Assert.Equal(61, SavedValue(saved, scheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.Brightness, "ac"));
+        Assert.Equal(60, SavedValue(saved, scheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.Brightness, "dc"));
+        Assert.Equal(321, SavedValue(saved, scheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.DisplayTimeout, "ac"));
+        Assert.Equal(322, SavedValue(saved, scheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.DisplayTimeout, "dc"));
+        Assert.True(saved.RootElement.GetProperty("wifiDisabled").GetBoolean());
+        foreach (var field in new[]
+                 {
+                     PowerModeStateField.CpuMinimumAcPercent,
+                     PowerModeStateField.CpuMinimumDcPercent,
+                     PowerModeStateField.ProcessorBoostModeAc,
+                     PowerModeStateField.ProcessorBoostModeDc,
+                     PowerModeStateField.WifiDisabled
+                 })
+        {
+            Assert.Contains(contract.Expectations, expectation => expectation.Field == field);
+        }
+        Assert.True(
+            contract.Outcome == BackendOperationOutcome.Succeeded,
+            result.StandardOutput);
+        Assert.Equal(0, result.ExitCode);
     }
 
     [Fact]
@@ -269,6 +328,17 @@ public sealed class PowerModeCliCompatibilityTests
     private static string Encode(string json) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
 
+    private static int SavedValue(
+        JsonDocument state,
+        string scheme,
+        string subgroup,
+        string setting,
+        string powerSource) =>
+        state.RootElement
+            .GetProperty("values")
+            .GetProperty($"{scheme}|{subgroup}|{setting}|{powerSource}")
+            .GetInt32();
+
     private sealed class FakePowerState : IDisposable
     {
         private readonly TemporaryDirectory _directory = new();
@@ -285,6 +355,7 @@ public sealed class PowerModeCliCompatibilityTests
                 """
                 {
                   "activeSchemeId": "381b4222-f694-41f0-9685-ff5bb260df2e",
+                  "wifiDisabled": false,
                   "values": {}
                 }
                 """);

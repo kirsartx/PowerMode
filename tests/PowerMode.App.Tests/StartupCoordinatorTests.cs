@@ -40,9 +40,10 @@ public sealed class StartupCoordinatorTests
     {
         var status = (LastOperationStatus)statusValue;
         var activations = 0;
+        var backend = new StartupBackend();
         var coordinator = new StartupCoordinator(
             new StartupJournal { Current = Record(status) },
-            new StartupBackend(),
+            backend,
             (_, _) =>
             {
                 activations++;
@@ -52,18 +53,22 @@ public sealed class StartupCoordinatorTests
         var result = await coordinator.InitializeAsync(LoadedSettings());
 
         Assert.False(result.ActivationDeferred);
+        Assert.NotNull(result.CurrentState);
+        Assert.Equal(1, backend.ReadCount);
         Assert.Equal(1, activations);
     }
 
     [Fact]
     public async Task InitializeAsync_NoJournalActivatesNormally()
     {
+        var events = new List<string>();
         var activations = 0;
         var coordinator = new StartupCoordinator(
-            new StartupJournal(),
-            new StartupBackend(),
+            new StartupJournal(events: events),
+            new StartupBackend(events),
             (_, _) =>
             {
+                events.Add("activate");
                 activations++;
                 return Task.CompletedTask;
             });
@@ -72,6 +77,8 @@ public sealed class StartupCoordinatorTests
 
         Assert.False(result.ActivationDeferred);
         Assert.Null(result.LastOperation);
+        Assert.Equal(Record(LastOperationStatus.Verified).BeforeState, result.CurrentState);
+        Assert.Equal(["journal", "read-state", "activate"], events);
         Assert.Equal(1, activations);
     }
 
@@ -93,6 +100,7 @@ public sealed class StartupCoordinatorTests
 
         Assert.True(result.ActivationDeferred);
         Assert.Contains("settings", result.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(result.CurrentState);
         Assert.Equal(0, activations);
     }
 
@@ -116,6 +124,52 @@ public sealed class StartupCoordinatorTests
         await coordinator.ResumeAfterRecoveryAsync();
 
         Assert.Equal(1, activations);
+    }
+
+    [Fact]
+    public async Task AcceptRecoveredSettings_CorruptStartupBecomesWritableAndActivatesOnce()
+    {
+        var activations = 0;
+        var coordinator = new StartupCoordinator(
+            new StartupJournal(),
+            new StartupBackend(),
+            (_, _) =>
+            {
+                activations++;
+                return Task.CompletedTask;
+            });
+        await coordinator.InitializeAsync(new SettingsLoadResult(
+            SettingsLoadState.Corrupt,
+            new PowerModeSettings(),
+            Error: "bad JSON"));
+
+        coordinator.AcceptRecoveredSettings(LoadedSettings());
+        await coordinator.ResumeAfterRecoveryAsync();
+        await coordinator.ResumeAfterRecoveryAsync();
+
+        Assert.Equal(1, activations);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_MissingTypedLaunchStateDefersActivation()
+    {
+        var activations = 0;
+        var backend = new StartupBackend { ReturnState = false };
+        var coordinator = new StartupCoordinator(
+            new StartupJournal(),
+            backend,
+            (_, _) =>
+            {
+                activations++;
+                return Task.CompletedTask;
+            });
+
+        var result = await coordinator.InitializeAsync(LoadedSettings());
+
+        Assert.True(result.ActivationDeferred);
+        Assert.Null(result.CurrentState);
+        Assert.Contains("power state", result.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, activations);
     }
 
     private static SettingsLoadResult LoadedSettings() =>
@@ -155,10 +209,20 @@ public sealed class StartupCoordinatorTests
 
     private sealed class StartupJournal : ILastOperationStore
     {
+        private readonly List<string>? _events;
+
+        public StartupJournal(List<string>? events = null)
+        {
+            _events = events;
+        }
+
         public LastOperationRecord? Current { get; set; }
 
-        public Task<LastOperationReadResult> ReadAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new LastOperationReadResult(Current, null));
+        public Task<LastOperationReadResult> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            _events?.Add("journal");
+            return Task.FromResult(new LastOperationReadResult(Current, null));
+        }
 
         public Task<LastOperationWriteResult> WriteAsync(
             LastOperationRecord record,
@@ -169,15 +233,27 @@ public sealed class StartupCoordinatorTests
 
     private sealed class StartupBackend : IPowerModeBackend
     {
+        private readonly List<string>? _events;
+
+        public StartupBackend(List<string>? events = null)
+        {
+            _events = events;
+        }
+
         public int ReadCount { get; private set; }
+        public bool ReturnState { get; set; } = true;
 
         public Task<PowerModeStateResult> ReadStateAsync(
             Guid operationId,
             CancellationToken cancellationToken = default)
         {
             ReadCount++;
+            _events?.Add("read-state");
+            var state = ReturnState
+                ? Record(LastOperationStatus.Verified).BeforeState
+                : null;
             return Task.FromResult(new PowerModeStateResult(
-                Record(LastOperationStatus.Verified).BeforeState,
+                state,
                 new BackendOperationResult(
                     operationId,
                     "status",
@@ -186,7 +262,7 @@ public sealed class StartupCoordinatorTests
                     TimeSpan.Zero,
                     BackendOperationOutcome.Succeeded,
                     null,
-                    Record(LastOperationStatus.Verified).BeforeState,
+                    state,
                     [],
                     [],
                     null)));

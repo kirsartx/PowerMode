@@ -84,8 +84,12 @@ public sealed class RecoveryCenterPresentationTests
         Assert.Contains("RestoreConfigurationAsync(", source);
         Assert.Contains("ResetDefaultsAsync(", source);
         Assert.True(
-            CountOccurrences(source, "ApplyFeatureSettings(SettingsStore.LoadStrict())") >= 2,
-            "Configuration recovery must strictly reload and apply both restored and reset settings.");
+            CountOccurrences(source, "AcceptRecoveredSettingsAndResumeStartupAsync(") >= 3,
+            "Restore, rollback and reset must accept a fresh load and resume startup.");
+        Assert.True(
+            CountOccurrences(source, "SettingsStore.Load()") >= 3,
+            "Each configuration recovery path must create a fresh safe load result.");
+        Assert.DoesNotContain("ApplyFeatureSettings(SettingsStore.LoadStrict())", source);
         Assert.DoesNotContain("RecordConfigurationRestoreAsync", source);
         Assert.DoesNotContain("RecordConfigurationResetAsync", source);
     }
@@ -129,9 +133,22 @@ public sealed class RecoveryCenterPresentationTests
         Assert.Contains("RecoveryCenterWindow_Closed", source);
         Assert.Contains("_lastOperationAvailability = null;", source);
         Assert.Contains("_latestBackup = null;", source);
-        Assert.Contains("var lastOperationAvailability", source);
-        Assert.Contains("var backupAvailability", source);
+        Assert.Contains("lastOperationAvailability", source);
+        Assert.Contains("backupAvailability", source);
         Assert.Contains("TryUpdatePresentation", source);
+    }
+
+    [Fact]
+    public void RecoveryCenter_PresentsPowerAndBackupAvailabilityErrorsIndependently()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "RecoveryCenterWindow.xaml.cs"));
+
+        Assert.Contains("_backupAvailability", source);
+        Assert.Contains("backupAvailability.Error", source);
+        Assert.Contains("_lastOperationAvailability = lastOperationAvailability", source);
+        Assert.Contains("_backupAvailability = backupAvailability", source);
+        Assert.DoesNotContain("throw new IOException(backupAvailability.Error)", source);
     }
 
     [Fact]
@@ -178,6 +195,9 @@ public sealed class RecoveryCenterPresentationTests
         Assert.DoesNotContain("Process.Start(new ProcessStartInfo(\"powercfg.exe\"", combined);
         Assert.DoesNotContain("Regex.Matches(result.Output", combined);
         Assert.DoesNotContain("ApplyStatus(result.Output)", combined);
+        Assert.Contains("_powerModeBackend.RestoreAsync(", features);
+        Assert.Contains("_startupPowerState", features);
+        Assert.DoesNotContain("_startupPowerState?.DetectedMode", features);
     }
 
     [Fact]
@@ -197,6 +217,36 @@ public sealed class RecoveryCenterPresentationTests
                 document.Descendants(),
                 element => (string?)element.Attribute(Xaml + "Name") == name);
         }
+    }
+
+    [Fact]
+    public void MainWindow_SuccessfulRecoveryAlwaysClearsPersistentPresentation()
+    {
+        var advanced = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
+        var main = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs"));
+
+        Assert.Contains("ClearPersistentRecoveryPresentation", main);
+        Assert.True(
+            CountOccurrences(advanced, "ClearPersistentRecoveryPresentation();") >= 2,
+            "Successful verify and restore must clear the persistent presentation independently of startup deferral.");
+    }
+
+    [Fact]
+    public void MainWindow_VerificationSurfacesJournalReadErrorBeforeStateFallback()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.Features.cs"));
+        var start = source.IndexOf("internal async Task VerifyWithSummaryAsync", StringComparison.Ordinal);
+        var end = source.IndexOf("\n    private ", start, StringComparison.Ordinal);
+        var body = source[start..end];
+
+        var errorCheck = body.IndexOf("availability.Error", StringComparison.Ordinal);
+        var fallbackRead = body.IndexOf("_powerModeBackend.ReadStateAsync", StringComparison.Ordinal);
+        Assert.True(errorCheck >= 0 && fallbackRead > errorCheck);
+        Assert.Contains("PresentStartupRecovery", body);
+        Assert.DoesNotContain("GetRecoveryService().VerifyLastOperationAsync", body);
     }
 
     [Fact]

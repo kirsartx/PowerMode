@@ -65,6 +65,34 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
 
         try
         {
+            if (_recoveryRequired)
+                return null;
+            if (cancellationToken.IsCancellationRequested)
+                return CancelledResult(request.OperationId);
+
+            LastOperationReadResult journal;
+            try
+            {
+                journal = await _lastOperationStore.ReadAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return CancelledResult(request.OperationId);
+            }
+            catch
+            {
+                _recoveryRequired = true;
+                return null;
+            }
+
+            if (!journal.Succeeded ||
+                journal.Record is { } record && IsRecoveryPending(record.Status))
+            {
+                _recoveryRequired = true;
+                return null;
+            }
+
             return await TrySwitchCoreAsync(request, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -128,10 +156,22 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             cancellationToken).ConfigureAwait(false);
         if (!preparedWrite.Succeeded)
         {
-            return FailedResult(
+            var error = preparedWrite.Error ??
+                "The operation journal could not be prepared.";
+            var failed = FailedResult(
                 request.OperationId,
-                preparedWrite.Error ?? "The operation journal could not be prepared.",
+                error,
                 beforeState);
+            if (preparedWrite.Conflict)
+            {
+                _recoveryRequired = true;
+                return failed with
+                {
+                    RequiresRecovery = true,
+                    JournalError = error
+                };
+            }
+            return failed;
         }
 
         if (cancellationToken.IsCancellationRequested)
@@ -373,9 +413,11 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
                 operationId,
                 cleanup.Token).ConfigureAwait(false);
             if (!terminal.Succeeded)
+            {
+                _recoveryRequired = true;
                 return new(false, false, terminal.Error, confirmed);
-            if (confirmed)
-                _recoveryRequired = false;
+            }
+            _recoveryRequired = !confirmed;
             return new(
                 confirmed,
                 true,
@@ -413,6 +455,8 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
                 JournalError = terminal.Error ?? "The terminal operation journal write failed."
             };
         }
+
+        _recoveryRequired = terminalStatus == LastOperationStatus.Uncertain;
 
         if (request.RecordHistory)
         {
@@ -577,6 +621,11 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             Add(expectations, PowerModeStateField.CpuMaximumDcPercent, profile.CpuMaximumDcPercent, true);
             Add(expectations, PowerModeStateField.CpuMinimumAcPercent, profile.CpuMinimumPercent, true);
             Add(expectations, PowerModeStateField.CpuMinimumDcPercent, profile.CpuMinimumPercent, true);
+            if (profile.DisableBoost)
+            {
+                Add(expectations, PowerModeStateField.ProcessorBoostModeAc, 0, true);
+                Add(expectations, PowerModeStateField.ProcessorBoostModeDc, 0, true);
+            }
             Add(expectations, PowerModeStateField.BrightnessAcPercent, profile.BrightnessAcPercent, false);
             Add(expectations, PowerModeStateField.BrightnessDcPercent, profile.BrightnessDcPercent, false);
             Add(expectations, PowerModeStateField.DisplayTimeoutAcSeconds, profile.DisplayTimeoutAcSeconds, true);
@@ -742,6 +791,11 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         IReadOnlyList<VerificationExpectation> expectations,
         IReadOnlyList<PowerModeStateField> mismatches) =>
         mismatches.Any(field => expectations.First(expectation => expectation.Field == field).Critical);
+
+    private static bool IsRecoveryPending(LastOperationStatus status) =>
+        status is LastOperationStatus.Prepared or
+            LastOperationStatus.Applying or
+            LastOperationStatus.Uncertain;
 
     private static LastOperationRecord NewJournalRecord(
         ModeSwitchRequest request,
