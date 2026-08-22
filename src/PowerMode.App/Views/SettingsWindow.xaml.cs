@@ -340,7 +340,8 @@ public sealed partial class SettingsWindow : Window
 
     private async Task PersistSettingsAsync(string backupReason, bool createVersionBackup = true)
     {
-        SettingsStore.Save(_settings);
+        if (!_owner.TrySaveSettings(_settings))
+            return;
         _owner.ApplyFeatureSettings(_settings);
 
         if (createVersionBackup)
@@ -359,11 +360,15 @@ public sealed partial class SettingsWindow : Window
 
     private void ApplyStartupRegistration()
     {
+        if (!_owner.CanPersistSettings)
+            return;
         _systemIntegration.ConfigureStartup(_settings.StartWithWindows, _settings.StartMinimized);
     }
 
     private async Task SaveAutomationAsync()
     {
+        if (!_owner.CanPersistSettings)
+            return;
         CaptureSettingsFromUi();
         ApplyStartupRegistration();
         await PersistSettingsAsync("settings-save");
@@ -745,8 +750,7 @@ public sealed partial class SettingsWindow : Window
             if (!result.Succeeded)
                 throw new InvalidOperationException(result.Error ?? (_zh ? "配置恢复失败。" : "Configuration restore failed."));
             _settings = SettingsStore.LoadStrict();
-            ApplyStartupRegistration();
-            _owner.ApplyFeatureSettings(_settings);
+            _owner.AcceptRecoveredSettings(_settings);
             LoadSettings();
             ShowSaved(_zh ? "配置已恢复并立即生效。" : "Configuration restored and applied.");
         }

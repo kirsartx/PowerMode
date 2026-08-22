@@ -1,9 +1,13 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Globalization;
 
 namespace PowerModeWinUI;
 
 public sealed class PowerModeSettings
 {
+    public int SchemaVersion { get; set; } = SettingsStore.CurrentSchemaVersion;
     public ExperienceMode ExperienceMode { get; set; } = ExperienceMode.Simple;
     public bool AutoSwitchEnabled { get; set; }
     public bool RealTimeMonitoringEnabled { get; set; }
@@ -46,15 +50,115 @@ public sealed class CustomPowerProfile
 
 public static class SettingsStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
     private static readonly object FileGate = new();
+    internal const int CurrentSchemaVersion = 1;
     public static string DirectoryPath { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PowerMode");
     public static string FilePath { get; } = Path.Combine(DirectoryPath, "settings.json");
 
-    public static PowerModeSettings Load()
+    public static SettingsLoadResult Load(string? path = null)
     {
-        try { lock(FileGate)return Normalize(File.Exists(FilePath) ? JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(FilePath), JsonOptions) : null); }
-        catch { return new PowerModeSettings(); }
+        return Load(path, TimeProvider.System, new BclSettingsFileSystem());
+    }
+
+    internal static SettingsLoadResult Load(
+        string? path,
+        TimeProvider timeProvider) =>
+        Load(path, timeProvider, new BclSettingsFileSystem());
+
+    internal static SettingsLoadResult Load(
+        string? path,
+        TimeProvider timeProvider,
+        ISettingsFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        lock (FileGate)
+        {
+            var source = Path.GetFullPath(path ?? FilePath);
+            bool exists;
+            try
+            {
+                exists = fileSystem.Exists(source);
+            }
+            catch (Exception exception)
+            {
+                return CorruptResult(
+                    new PowerModeSettings(),
+                    null,
+                    $"Settings existence check failed: {exception.Message}");
+            }
+
+            if (!exists)
+            {
+                return new(SettingsLoadState.FirstRun, new PowerModeSettings());
+            }
+
+            byte[] bytes;
+            try
+            {
+                bytes = fileSystem.ReadAllBytes(source);
+            }
+            catch (Exception exception)
+            {
+                return CorruptResult(
+                    new PowerModeSettings(),
+                    null,
+                    $"Settings read failed: {exception.Message}");
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(bytes);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                    throw new JsonException("Settings root must be a JSON object.");
+
+                var state = SettingsLoadState.Migrated;
+                var schema = default(JsonElement);
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (string.Equals(
+                            property.Name,
+                            "schemaVersion",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        schema = property.Value;
+                        break;
+                    }
+                }
+
+                if (schema.ValueKind != JsonValueKind.Undefined)
+                {
+                    if (schema.ValueKind != JsonValueKind.Number ||
+                        !schema.TryGetInt32(out var schemaVersion))
+                        throw new JsonException("Settings schemaVersion is invalid.");
+                    if (schemaVersion != CurrentSchemaVersion)
+                        throw new InvalidDataException(
+                            $"Unsupported settings schema version {schemaVersion}.");
+                    state = SettingsLoadState.Loaded;
+                }
+
+                var settings = DeserializeStrict(Encoding.UTF8.GetString(bytes));
+                return new(state, settings);
+            }
+            catch (Exception exception) when (
+                exception is JsonException or InvalidDataException or
+                    NotSupportedException or FormatException or
+                    OverflowException or ArgumentException)
+            {
+                return QuarantineCorrupt(
+                    source,
+                    bytes,
+                    timeProvider,
+                    fileSystem,
+                    exception.Message);
+            }
+        }
     }
     public static PowerModeSettings LoadStrict(string? path = null)
     {
@@ -76,6 +180,11 @@ public static class SettingsStore
             finally{if(File.Exists(temporary))File.Delete(temporary);}
         }
     }
+    public static PowerModeSettings Clone(PowerModeSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return DeserializeStrict(JsonSerializer.Serialize(Normalize(settings), JsonOptions));
+    }
     public static void Export(PowerModeSettings settings, string path) { lock(FileGate)File.WriteAllText(path, JsonSerializer.Serialize(Normalize(settings), JsonOptions)); }
     public static PowerModeSettings Import(string path) { lock(FileGate)return Normalize(JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(path), JsonOptions)); }
     internal static PowerModeSettings DeserializeStrict(string json)
@@ -87,6 +196,7 @@ public static class SettingsStore
     internal static PowerModeSettings Normalize(PowerModeSettings? settings)
     {
         settings ??= new();
+        settings.SchemaVersion = CurrentSchemaVersion;
         if (!Enum.IsDefined(settings.ExperienceMode))
             settings.ExperienceMode = ExperienceMode.Simple;
         settings.Profiles ??= []; settings.Rules ??= []; settings.RemoteProcesses ??= string.Empty; settings.PerformanceProcesses ??= string.Empty;
@@ -108,4 +218,47 @@ public static class SettingsStore
         foreach(var rule in settings.Rules){if(rule.Id==Guid.Empty)rule.Id=Guid.NewGuid();rule.Name=string.IsNullOrWhiteSpace(rule.Name)?"Automation rule":rule.Name.Trim();var target=rule.TargetMode?.Trim().ToLowerInvariant();rule.TargetMode=target is "remote" or "saver" or "balanced" or "high"?target:"balanced";rule.Conditions??=[];}
         return settings;
     }
+
+    private static SettingsLoadResult QuarantineCorrupt(
+        string source,
+        byte[] bytes,
+        TimeProvider timeProvider,
+        ISettingsFileSystem fileSystem,
+        string primaryError)
+    {
+        string? quarantinePath = null;
+        string error = $"Settings load failed: {primaryError}";
+        try
+        {
+            var sourceDirectory = Path.GetDirectoryName(source)
+                ?? throw new DirectoryNotFoundException(
+                    "Settings directory could not be determined.");
+            var quarantineDirectory = Path.Combine(sourceDirectory, "quarantine");
+            fileSystem.CreateDirectory(quarantineDirectory);
+            var timestamp = timeProvider.GetUtcNow().UtcDateTime.ToString(
+                "yyyyMMdd'T'HHmmssfff'Z'",
+                CultureInfo.InvariantCulture);
+            var hash = Convert.ToHexString(SHA256.HashData(bytes));
+            quarantinePath = Path.Combine(
+                quarantineDirectory,
+                $"settings.{timestamp}.{hash}.json");
+            fileSystem.WriteAllBytes(quarantinePath, bytes);
+        }
+        catch (Exception quarantineException)
+        {
+            error += $"; quarantine failed: {quarantineException.Message}";
+            quarantinePath = null;
+        }
+
+        return CorruptResult(
+            new PowerModeSettings(),
+            quarantinePath,
+            error);
+    }
+
+    private static SettingsLoadResult CorruptResult(
+        PowerModeSettings settings,
+        string? quarantinePath,
+        string error) =>
+        new(SettingsLoadState.Corrupt, settings, quarantinePath, error);
 }

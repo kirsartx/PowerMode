@@ -76,6 +76,8 @@ public sealed partial class MainWindow
 
     private async Task RunStartupFeaturesAsync()
     {
+        if (!CanPersistSettings)
+            return;
         if (!_featureSettings.CheckUpdatesOnStartup || string.IsNullOrWhiteSpace(_featureSettings.UpdateApiUrl))
             return;
 
@@ -84,6 +86,8 @@ public sealed partial class MainWindow
 
     internal void ApplySystemSettings(PowerModeSettings settings)
     {
+        if (!CanPersistSettings)
+            return;
         try
         {
             _systemIntegration.ConfigureStartup(settings.StartWithWindows, settings.StartMinimized);
@@ -517,7 +521,7 @@ public sealed partial class MainWindow
                 _featureSettings.LastMode = targetMode;
                 try
                 {
-                    SettingsStore.Save(_featureSettings);
+                    TrySaveSettings(_featureSettings);
                     _ = BackupSettingsIfChangedAsync(_featureSettings.ConfigurationBackupCount, "mode-switch");
                 }
                 catch (Exception settingsError)

@@ -19,7 +19,8 @@ public sealed partial class MainWindow
     internal const string HighGuid="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
     private const uint WmHotkey=0x0312,WmTray=0x8000+100,WmLButtonDblClk=0x0203,WmRButtonUp=0x0205;
     private const uint ModAlt=0x0001,ModControl=0x0002;
-    private PowerModeSettings _featureSettings=SettingsStore.Load();
+    private SettingsLoadResult _settingsLoadResult=default!;
+    private PowerModeSettings _featureSettings=default!;
     private DispatcherTimer? _featureTimer;
     private bool _featureTickInProgress;
     private string _startupPlanGuid=string.Empty,_lastAutoMode=string.Empty;
@@ -35,6 +36,48 @@ public sealed partial class MainWindow
     private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
 
     internal HardwareCapabilities HardwareCapabilities => _hardwareCapabilities;
+    internal bool CanPersistSettings => _settingsLoadResult.AllowsExternalSideEffects;
+
+    internal bool TrySaveSettings(PowerModeSettings settings)
+    {
+        if (!CanPersistSettings)
+        {
+            ShowCorruptSettingsWarning();
+            return false;
+        }
+
+        try
+        {
+            SettingsStore.Save(settings);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            AppendLog($"Settings save: {exception.Message}");
+            return false;
+        }
+    }
+
+    internal void AcceptRecoveredSettings(PowerModeSettings settings)
+    {
+        _settingsLoadResult = new SettingsLoadResult(
+            SettingsLoadState.Loaded,
+            settings);
+        _featureSettings = settings;
+        ApplyFeatureSettings(settings);
+        StatusBar.Severity = InfoBarSeverity.Success;
+        StatusText.Text = IsChinese
+            ? "配置已恢复，可继续编辑设置"
+            : "Settings recovered; editing is available again";
+    }
+
+    private void ShowCorruptSettingsWarning()
+    {
+        StatusBar.Severity = InfoBarSeverity.Warning;
+        StatusText.Text = IsChinese
+            ? "配置文件损坏：请打开恢复中心；当前设置为只读安全默认值"
+            : "Settings are damaged: open Recovery; safe defaults are read-only";
+    }
 
     private void InitializeFeatures()
     {
@@ -68,11 +111,16 @@ public sealed partial class MainWindow
 
     private void ExperienceModeButton_Click(object sender,RoutedEventArgs e)
     {
+        if (!CanPersistSettings)
+        {
+            ShowCorruptSettingsWarning();
+            return;
+        }
         var mode=ExperienceModeButton.IsChecked==true
             ?ExperienceMode.Professional
             :ExperienceMode.Simple;
         ApplyExperienceMode(mode);
-        SettingsStore.Save(_featureSettings);
+        TrySaveSettings(_featureSettings);
     }
 
     internal void ApplyFeatureSettings(PowerModeSettings settings)
@@ -81,6 +129,12 @@ public sealed partial class MainWindow
         ApplyExperienceMode(settings.ExperienceMode);
         AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
         if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
+        if (!CanPersistSettings)
+        {
+            _featureTimer?.Stop();
+            ShowCorruptSettingsWarning();
+            return;
+        }
         _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;_featureTimer.Start();
         _=ConfigureMonitoringAsync();ApplySystemSettings(settings);_=RefreshRecommendationAsync();
     }
@@ -162,6 +216,11 @@ public sealed partial class MainWindow
 
     internal async Task ApplyCustomProfileAsync(CustomPowerProfile profile)
     {
+        if (!CanPersistSettings)
+        {
+            ShowCorruptSettingsWarning();
+            return;
+        }
         if(_busy||_modeSwitchInProgress)return;
         var previous=GetActivePlanGuidFast();var previousMode=_featureSettings.LastMode;var stopwatch=Stopwatch.StartNew();var succeeded=false;string? error=null;
         _busy=true;_customProfileInProgress=true;SetControlsEnabled(false);StatusText.Text=IsChinese?$"正在应用：{profile.Name}":$"Applying: {profile.Name}";
@@ -170,7 +229,7 @@ public sealed partial class MainWindow
             var dcCpu=profile.UseSeparateBatteryValues?profile.BatteryCpuMax:profile.CpuMax;var dcBrightness=profile.UseSeparateBatteryValues?profile.BatteryBrightness:profile.Brightness;var dcDisplay=profile.UseSeparateBatteryValues?profile.BatteryDisplayOffSeconds:profile.DisplayOffSeconds;
             var list=new List<string[]>{new[]{"/setactive",SaverGuid},new[]{"/setacvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMAX",profile.CpuMax.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMAX",dcCpu.ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMIN",profile.CpuMin.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_PROCESSOR","PROCTHROTTLEMIN",Math.Min(profile.CpuMin,dcCpu).ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_PROCESSOR","PERFBOOSTMODE",profile.DisableBoost?"0":"2"},new[]{"/setdcvalueindex",SaverGuid,"SUB_PROCESSOR","PERFBOOSTMODE",profile.DisableBoost?"0":"2"},new[]{"/setacvalueindex",SaverGuid,"SUB_VIDEO","VIDEONORMALLEVEL",profile.Brightness.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_VIDEO","VIDEONORMALLEVEL",dcBrightness.ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_VIDEO","VIDEOIDLE",profile.DisplayOffSeconds.ToString()},new[]{"/setdcvalueindex",SaverGuid,"SUB_VIDEO","VIDEOIDLE",dcDisplay.ToString()},new[]{"/setacvalueindex",SaverGuid,"SUB_SLEEP","STANDBYIDLE","0"},new[]{"/setdcvalueindex",SaverGuid,"SUB_SLEEP","STANDBYIDLE","0"},new[]{"/setactive",SaverGuid}};
             foreach(var command in list)if(!await RunPowerCfgAsync(command)){error=IsChinese?"预设命令失败":"Profile command failed";await RestorePlanAsync(previous);StatusText.Text=IsChinese?"预设应用失败，已回滚":"Profile failed; rolled back";StatusBar.Severity=InfoBarSeverity.Error;return;}
-            _lastCustomProfile=profile;_featureSettings.LastMode="saver";try{SettingsStore.Save(_featureSettings);}catch(Exception ex){AppendLog($"Settings save: {ex.Message}");}
+            _lastCustomProfile=profile;_featureSettings.LastMode="saver";TrySaveSettings(_featureSettings);
             ModeValue.Text=profile.Name;CpuValue.Text=$"{profile.CpuMax}%";BrightnessValue.Text=$"{profile.Brightness}%";SleepValue.Text=CustomProfileSleepDisplay.Format(profile.DisplayOffSeconds);UpdateActiveMode(string.Empty);StatusText.Text=IsChinese?$"已应用：{profile.Name}":$"Applied: {profile.Name}";StatusBar.Severity=InfoBarSeverity.Success;succeeded=true;
         }
         catch(Exception ex)
@@ -190,9 +249,9 @@ public sealed partial class MainWindow
     {
         try{var command="Get-NetAdapter | Where-Object { $_.Name -like '*Wi*' -or $_.InterfaceDescription -match 'Wireless|Wi-Fi|WLAN' } | Enable-NetAdapter -Confirm:$false";using var p=Process.Start(new ProcessStartInfo("powershell.exe") {UseShellExecute=true,Verb="runas",Arguments=$"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",WindowStyle=ProcessWindowStyle.Hidden});if(p is null)return;await p.WaitForExitAsync();StatusText.Text=p.ExitCode==0?(IsChinese?"WiFi 已恢复":"WiFi restored"):(IsChinese?"WiFi 恢复失败":"WiFi restore failed");StatusBar.Severity=p.ExitCode==0?InfoBarSeverity.Success:InfoBarSeverity.Error;}catch(Win32Exception){StatusText.Text=IsChinese?"已取消管理员授权":"Administrator request cancelled";}
     }
-    private void FeaturesButton_Click(object sender,RoutedEventArgs e){if(_settingsWindow is not null){_settingsWindow.Activate();return;}_settingsWindow=new SettingsWindow(this,_featureSettings,IsChinese);_settingsWindow.Closed+=(_,_)=>_settingsWindow=null;_settingsWindow.Activate();}
-    private void AutoQuickToggle_Click(object sender,RoutedEventArgs e){_featureSettings.AutoSwitchEnabled=AutoQuickToggle.IsChecked==true;SettingsStore.Save(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"自动切换已{(_featureSettings.AutoSwitchEnabled?"开启":"关闭")}"):($"Automatic switching {(_featureSettings.AutoSwitchEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
-    private void LiveQuickToggle_Click(object sender,RoutedEventArgs e){_featureSettings.RealTimeMonitoringEnabled=LiveQuickToggle.IsChecked==true;SettingsStore.Save(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"实时监控已{(_featureSettings.RealTimeMonitoringEnabled?"开启":"关闭")}"):($"Live monitoring {(_featureSettings.RealTimeMonitoringEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
+    private void FeaturesButton_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();OpenRecoveryCenterButton_Click(sender,e);return;}if(_settingsWindow is not null){_settingsWindow.Activate();return;}_settingsWindow=new SettingsWindow(this,_featureSettings,IsChinese);_settingsWindow.Closed+=(_,_)=>_settingsWindow=null;_settingsWindow.Activate();}
+    private void AutoQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.AutoSwitchEnabled=AutoQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"自动切换已{(_featureSettings.AutoSwitchEnabled?"开启":"关闭")}"):($"Automatic switching {(_featureSettings.AutoSwitchEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
+    private void LiveQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.RealTimeMonitoringEnabled=LiveQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"实时监控已{(_featureSettings.RealTimeMonitoringEnabled?"开启":"关闭")}"):($"Live monitoring {(_featureSettings.RealTimeMonitoringEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
 
     private async void RootGrid_KeyDown(object sender,KeyRoutedEventArgs e)
     {

@@ -56,6 +56,8 @@ public sealed partial class MainWindow : Window
     public MainWindow(bool startHidden = false)
     {
         _startHidden = startHidden;
+        _settingsLoadResult = SettingsStore.Load();
+        _featureSettings = _settingsLoadResult.Settings;
         InitializeComponent();
         ConfigureWindow();
         _cliPath = FindCliPath();
@@ -74,9 +76,10 @@ public sealed partial class MainWindow : Window
         if (_startHidden) AppWindow.Hide();
         await RefreshStatusAsync();
         _ = DetectCapabilitiesAndRefreshPresentationAsync();
-        if (_featureSettings.ApplyLastModeOnStartup && !string.IsNullOrWhiteSpace(_featureSettings.LastMode))
+        if (CanPersistSettings && _featureSettings.ApplyLastModeOnStartup && !string.IsNullOrWhiteSpace(_featureSettings.LastMode))
             await RunModeWithContextAsync(_featureSettings.LastMode,new SwitchRequestContext("startup",AllowPreview:false));
-        await RunStartupFeaturesAsync();
+        if (CanPersistSettings)
+            await RunStartupFeaturesAsync();
     }
 
     private void ConfigureWindow()
