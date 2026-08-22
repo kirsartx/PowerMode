@@ -30,7 +30,7 @@ internal sealed class RecoveredSettingsActivationFlow
 
         cancellationToken.ThrowIfCancellationRequested();
         _accept(recovered);
-        await _resumeAsync(cancellationToken).ConfigureAwait(false);
+        await _resumeAsync(cancellationToken);
         _applyAfterResume(recovered);
     }
 }
