@@ -525,7 +525,9 @@ public sealed class SwitchHistoryEntry
 /// </summary>
 public sealed class HistoryStore : IRecoveryHistory
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileGates =
+    public const int MaximumEntries = 2_000;
+
+    private static readonly ConcurrentDictionary<string, HistoryFileState> FileStates =
         new(StringComparer.OrdinalIgnoreCase);
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -542,20 +544,27 @@ public sealed class HistoryStore : IRecoveryHistory
 
     private readonly SemaphoreSlim _gate;
     private readonly Func<string, string, CancellationToken, Task> _appendTextAsync;
+    private readonly Func<string, CancellationToken, Task<IReadOnlyList<SwitchHistoryEntry>>> _readEntriesAsync;
+    private readonly Func<string, string, CancellationToken, Task> _rewriteTextAsync;
 
     public HistoryStore(string? filePath = null)
-        : this(filePath, AppendTextAsync)
+        : this(filePath, AppendTextAsync, ReadEntriesAsync, RewriteTextAsync)
     {
     }
 
     internal HistoryStore(
         string? filePath,
-        Func<string, string, CancellationToken, Task> appendTextAsync)
+        Func<string, string, CancellationToken, Task> appendTextAsync,
+        Func<string, CancellationToken, Task<IReadOnlyList<SwitchHistoryEntry>>>? readEntriesAsync = null,
+        Func<string, string, CancellationToken, Task>? rewriteTextAsync = null)
     {
         FilePath = Path.GetFullPath(string.IsNullOrWhiteSpace(filePath) ? DefaultFilePath : filePath);
-        _gate = FileGates.GetOrAdd(FilePath, static _ => new SemaphoreSlim(1, 1));
+        var state = FileStates.GetOrAdd(FilePath, static _ => new HistoryFileState());
+        _gate = state.Gate;
         _appendTextAsync = appendTextAsync
             ?? throw new ArgumentNullException(nameof(appendTextAsync));
+        _readEntriesAsync = readEntriesAsync ?? ReadEntriesAsync;
+        _rewriteTextAsync = rewriteTextAsync ?? RewriteTextAsync;
     }
 
     public string FilePath { get; }
@@ -575,11 +584,36 @@ public sealed class HistoryStore : IRecoveryHistory
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            if (await ContainsIdUnlockedAsync(entry.Id, cancellationToken).ConfigureAwait(false))
+            var state = GetState();
+            await EnsureInitializedUnlockedAsync(state, cancellationToken).ConfigureAwait(false);
+            if (state.KnownIds.Contains(entry.Id))
+            {
+                if (state.ValidEntryCount > MaximumEntries)
+                {
+                    await CompactUnlockedAsync(state, MaximumEntries, cancellationToken)
+                        .ConfigureAwait(false);
+                }
                 return;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             var line = JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine;
-            await _appendTextAsync(FilePath, line, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _appendTextAsync(FilePath, line, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                state.Invalidate();
+                throw;
+            }
+
+            state.Add(entry);
+            if (state.ValidEntryCount > MaximumEntries)
+            {
+                await CompactUnlockedAsync(state, MaximumEntries, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -587,40 +621,26 @@ public sealed class HistoryStore : IRecoveryHistory
         }
     }
 
-    private async Task<bool> ContainsIdUnlockedAsync(
-        Guid id,
+    private HistoryFileState GetState() =>
+        FileStates[FilePath];
+
+    private async Task EnsureInitializedUnlockedAsync(
+        HistoryFileState state,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(FilePath))
-            return false;
+        if (state.Initialized)
+            return;
 
-        await using var stream = new FileStream(
-            FilePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            16 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var reader = new StreamReader(
-            stream,
-            Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: true);
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        try
         {
-            if (string.IsNullOrWhiteSpace(line))
-                continue;
-            try
-            {
-                var existing = JsonSerializer.Deserialize<SwitchHistoryEntry>(line, JsonOptions);
-                if (existing?.Id == id)
-                    return true;
-            }
-            catch (JsonException)
-            {
-                // Match normal history reads: one malformed line must not block later entries.
-            }
+            var entries = await _readEntriesAsync(FilePath, cancellationToken).ConfigureAwait(false);
+            state.Initialize(entries);
         }
-        return false;
+        catch
+        {
+            state.Invalidate();
+            throw;
+        }
     }
 
     private static Task AppendTextAsync(
@@ -637,9 +657,12 @@ public sealed class HistoryStore : IRecoveryHistory
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var entries = await ReadRecentUnlockedAsync(maximumCount, cancellationToken).ConfigureAwait(false);
-            entries.Reverse();
-            return entries;
+            var state = GetState();
+            await EnsureInitializedUnlockedAsync(state, cancellationToken).ConfigureAwait(false);
+            return state.RecentEntries
+                .Reverse()
+                .Take(maximumCount)
+                .ToArray();
         }
         finally
         {
@@ -656,6 +679,7 @@ public sealed class HistoryStore : IRecoveryHistory
             {
                 File.Delete(FilePath);
             }
+            GetState().Reset();
         }
         finally
         {
@@ -669,41 +693,18 @@ public sealed class HistoryStore : IRecoveryHistory
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var state = GetState();
             if (!File.Exists(FilePath))
             {
+                state.Reset();
                 return;
             }
 
-            var entries = await ReadRecentUnlockedAsync(maximumEntries, cancellationToken).ConfigureAwait(false);
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var temporaryPath = FilePath + ".tmp";
-            try
+            await EnsureInitializedUnlockedAsync(state, cancellationToken).ConfigureAwait(false);
+            if (state.ValidEntryCount > maximumEntries)
             {
-                await using (var stream = new FileStream(
-                    temporaryPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    16 * 1024,
-                    FileOptions.Asynchronous))
-                await using (var writer = new StreamWriter(stream, Utf8NoBom))
-                {
-                    foreach (var entry in entries)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        await writer.WriteLineAsync(JsonSerializer.Serialize(entry, JsonOptions).AsMemory(), cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-                }
-
-                File.Move(temporaryPath, FilePath, overwrite: true);
-            }
-            finally
-            {
-                if (File.Exists(temporaryPath))
-                {
-                    File.Delete(temporaryPath);
-                }
+                await CompactUnlockedAsync(state, maximumEntries, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         finally
@@ -712,18 +713,41 @@ public sealed class HistoryStore : IRecoveryHistory
         }
     }
 
-    private async Task<List<SwitchHistoryEntry>> ReadRecentUnlockedAsync(
-        int maximumCount,
+    private async Task CompactUnlockedAsync(
+        HistoryFileState state,
+        int maximumEntries,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(FilePath))
+        var entries = state.RecentEntries
+            .TakeLast(maximumEntries)
+            .ToArray();
+        var contents = string.Join(
+            Environment.NewLine,
+            entries.Select(entry => JsonSerializer.Serialize(entry, JsonOptions))) +
+            Environment.NewLine;
+        try
         {
-            return [];
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            await _rewriteTextAsync(FilePath, contents, cancellationToken).ConfigureAwait(false);
+            state.Initialize(entries);
         }
+        catch
+        {
+            state.Invalidate();
+            throw;
+        }
+    }
 
-        var queue = new Queue<SwitchHistoryEntry>(maximumCount);
+    private static async Task<IReadOnlyList<SwitchHistoryEntry>> ReadEntriesAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+            return [];
+
+        var entries = new List<SwitchHistoryEntry>();
         await using var stream = new FileStream(
-            FilePath,
+            path,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
@@ -733,31 +757,75 @@ public sealed class HistoryStore : IRecoveryHistory
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (string.IsNullOrWhiteSpace(line))
-            {
                 continue;
-            }
-
             try
             {
                 var entry = JsonSerializer.Deserialize<SwitchHistoryEntry>(line, JsonOptions);
-                if (entry is null)
-                {
-                    continue;
-                }
-
-                if (queue.Count == maximumCount)
-                {
-                    queue.Dequeue();
-                }
-                queue.Enqueue(entry);
+                if (entry is not null)
+                    entries.Add(entry);
             }
             catch (JsonException)
             {
                 // Keep reading: JSONL deliberately isolates a damaged record.
             }
         }
+        return entries;
+    }
 
-        return [.. queue];
+    private static async Task RewriteTextAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken)
+    {
+        var temporaryPath = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllTextAsync(temporaryPath, contents, Utf8NoBom, cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
+    private sealed class HistoryFileState
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public HashSet<Guid> KnownIds { get; private set; } = [];
+        public Queue<SwitchHistoryEntry> RecentEntries { get; private set; } = [];
+        public int ValidEntryCount { get; private set; }
+        public bool Initialized { get; private set; }
+
+        public void Initialize(IReadOnlyList<SwitchHistoryEntry> entries)
+        {
+            RecentEntries = new Queue<SwitchHistoryEntry>(entries.TakeLast(MaximumEntries));
+            KnownIds = entries.Select(entry => entry.Id).ToHashSet();
+            ValidEntryCount = entries.Count;
+            Initialized = true;
+        }
+
+        public void Add(SwitchHistoryEntry entry)
+        {
+            KnownIds.Add(entry.Id);
+            RecentEntries.Enqueue(entry);
+            if (RecentEntries.Count > MaximumEntries)
+                RecentEntries.Dequeue();
+            ValidEntryCount++;
+        }
+
+        public void Reset()
+        {
+            KnownIds = [];
+            RecentEntries = [];
+            ValidEntryCount = 0;
+            Initialized = false;
+        }
+
+        public void Invalidate() => Reset();
     }
 }
 
