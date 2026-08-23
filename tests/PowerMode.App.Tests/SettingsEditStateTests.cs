@@ -1,9 +1,180 @@
+using System.Text.Json;
 using Xunit;
 
 namespace PowerModeWinUI.Tests;
 
 public sealed class SettingsEditStateTests
 {
+    [Fact]
+    public void Clone_UnnormalizedSourceRemainsByteAndValueIdentical()
+    {
+        var source = CreateSettings("  Draft profile  ", "Owner rule");
+        source.MonitorIntervalSeconds = 1;
+        var profiles = source.Profiles;
+        var profile = source.Profiles[0];
+        var before = JsonSerializer.SerializeToUtf8Bytes(source);
+
+        var clone = SettingsStore.Clone(source);
+
+        Assert.Equal(before, JsonSerializer.SerializeToUtf8Bytes(source));
+        Assert.Same(profiles, source.Profiles);
+        Assert.Same(profile, source.Profiles[0]);
+        Assert.Equal(1, source.MonitorIntervalSeconds);
+        Assert.Equal("  Draft profile  ", source.Profiles[0].Name);
+        Assert.Equal(10, clone.MonitorIntervalSeconds);
+        Assert.Equal("Draft profile", clone.Profiles[0].Name);
+    }
+
+    [Fact]
+    public async Task SaveAsync_ThrowingPersistencePreservesOwnerAndUnnormalizedWorkingBytes()
+    {
+        var owner = CreateSettings("Owner profile", "Owner rule");
+        var session = new SettingsEditSession(
+            owner,
+            (_, _) => throw new IOException("disk full"),
+            _ => throw new InvalidOperationException("owner must not be applied"));
+        session.Mutate(settings =>
+        {
+            settings.MonitorIntervalSeconds = 1;
+            settings.Profiles[0].Name = "  Unsaved profile  ";
+        });
+        var ownerBefore = JsonSerializer.SerializeToUtf8Bytes(owner);
+        var workingBefore = JsonSerializer.SerializeToUtf8Bytes(session.WorkingCopy);
+        var workingIdentity = session.WorkingCopy;
+
+        var result = await session.SaveAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ownerBefore, JsonSerializer.SerializeToUtf8Bytes(owner));
+        Assert.Equal(workingBefore, JsonSerializer.SerializeToUtf8Bytes(session.WorkingCopy));
+        Assert.Same(workingIdentity, session.WorkingCopy);
+        Assert.Equal(1, session.WorkingCopy.MonitorIntervalSeconds);
+        Assert.Equal("  Unsaved profile  ", session.WorkingCopy.Profiles[0].Name);
+        Assert.True(session.State.IsDirty);
+    }
+
+    [Fact]
+    public void ProfileSelection_InvalidDirtyDraftRestoresSelectionAndPreservesDraft()
+    {
+        var coordinator = new ProfileDraftSelectionCoordinator();
+        var selected = "requested";
+        var displayedDraft = "invalid draft";
+        var stageCount = 0;
+        var displayCount = 0;
+        var revalidateCount = 0;
+
+        var result = coordinator.Apply(
+            draftDirty: true,
+            inputValid: false,
+            stageDraft: () => stageCount++,
+            restorePreviousSelection: () => selected = "previous",
+            displayRequestedProfile: () =>
+            {
+                displayCount++;
+                displayedDraft = "requested profile";
+            },
+            revalidate: () =>
+            {
+                revalidateCount++;
+                return true;
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal("previous", selected);
+        Assert.Equal("invalid draft", displayedDraft);
+        Assert.True(result.DraftDirty);
+        Assert.False(result.InputValid);
+        Assert.Equal(0, stageCount);
+        Assert.Equal(0, displayCount);
+        Assert.Equal(0, revalidateCount);
+    }
+
+    [Fact]
+    public void ProfileSelection_ValidDirtyDraftStagesDisplaysThenRevalidates()
+    {
+        var coordinator = new ProfileDraftSelectionCoordinator();
+        var order = new List<string>();
+
+        var result = coordinator.Apply(
+            draftDirty: true,
+            inputValid: true,
+            stageDraft: () => order.Add("stage"),
+            restorePreviousSelection: () => order.Add("restore"),
+            displayRequestedProfile: () => order.Add("display"),
+            revalidate: () =>
+            {
+                order.Add("revalidate");
+                return true;
+            });
+
+        Assert.True(result.Accepted);
+        Assert.False(result.DraftDirty);
+        Assert.True(result.InputValid);
+        Assert.Equal(["stage", "display", "revalidate"], order);
+    }
+
+    [Fact]
+    public void ProfileSelection_AcceptedCleanSelectionUsesFreshValidationResult()
+    {
+        var coordinator = new ProfileDraftSelectionCoordinator();
+
+        var result = coordinator.Apply(
+            draftDirty: false,
+            inputValid: true,
+            stageDraft: () => throw new InvalidOperationException("clean draft"),
+            restorePreviousSelection: () => throw new InvalidOperationException("accepted"),
+            displayRequestedProfile: () => { },
+            revalidate: () => false);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.DraftDirty);
+        Assert.False(result.InputValid);
+    }
+
+    [Fact]
+    public void RemoveProfileWhenConfirmed_DuplicateNamesRemoveOnlySelectedInstance()
+    {
+        var owner = CreateSettings("Duplicate", "Rule");
+        owner.Profiles[0].CpuMax = 35;
+        owner.Profiles.Add(new CustomPowerProfile
+        {
+            Name = "Duplicate",
+            CpuMax = 85
+        });
+        var session = new SettingsEditSession(
+            owner,
+            (_, _) => Task.CompletedTask,
+            _ => { });
+        var selected = session.WorkingCopy.Profiles[1];
+
+        var removed = session.RemoveProfileWhenConfirmed(selected, confirmed: true);
+
+        Assert.True(removed);
+        var remaining = Assert.Single(session.WorkingCopy.Profiles);
+        Assert.Equal(35, remaining.CpuMax);
+        Assert.Equal(2, owner.Profiles.Count);
+        Assert.True(session.State.IsDirty);
+    }
+
+    [Fact]
+    public void RemoveProfileWhenConfirmed_CancellationPreservesDuplicateProfiles()
+    {
+        var owner = CreateSettings("Duplicate", "Rule");
+        owner.Profiles.Add(new CustomPowerProfile { Name = "Duplicate" });
+        var session = new SettingsEditSession(
+            owner,
+            (_, _) => Task.CompletedTask,
+            _ => { });
+        var selected = session.WorkingCopy.Profiles[1];
+
+        var removed = session.RemoveProfileWhenConfirmed(selected, confirmed: false);
+
+        Assert.False(removed);
+        Assert.Equal(2, session.WorkingCopy.Profiles.Count);
+        Assert.Contains(selected, session.WorkingCopy.Profiles);
+        Assert.False(session.State.IsDirty);
+    }
+
     [Fact]
     public void DirtyValidState_CanSave_AndSuccessfulSaveClearsIt()
     {
@@ -275,6 +446,88 @@ public sealed class SettingsEditStateTests
 
         Assert.True(shouldClose);
         Assert.False(prompted);
+    }
+
+    [Fact]
+    public async Task OwnerShutdown_ContinueEditingKeepsOwnerAndSettingsOpen()
+    {
+        var state = new SettingsEditState();
+        state.MarkChanged();
+        var settingsClose = new SettingsCloseCoordinator(
+            state,
+            () => Task.FromResult(true));
+        var ownerShutdown = new SettingsOwnerShutdownCoordinator();
+        var settingsOpen = true;
+        var ownerOpen = true;
+
+        var closed = await ownerShutdown.RequestAsync(
+            async () =>
+            {
+                var childClosed = await settingsClose.RequestCloseAsync(_ =>
+                    Task.FromResult(SettingsCloseChoice.ContinueEditing));
+                if (childClosed)
+                    settingsOpen = false;
+                return childClosed;
+            },
+            () => ownerOpen = false);
+
+        Assert.False(closed);
+        Assert.True(settingsOpen);
+        Assert.True(ownerOpen);
+        Assert.True(state.IsDirty);
+    }
+
+    [Fact]
+    public async Task OwnerShutdown_FailedSaveKeepsOwnerAndSettingsOpen()
+    {
+        var state = new SettingsEditState();
+        state.MarkChanged();
+        var saveAttempts = 0;
+        var settingsClose = new SettingsCloseCoordinator(
+            state,
+            () =>
+            {
+                saveAttempts++;
+                return Task.FromResult(false);
+            });
+        var ownerShutdown = new SettingsOwnerShutdownCoordinator();
+        var settingsOpen = true;
+        var ownerOpen = true;
+
+        var closed = await ownerShutdown.RequestAsync(
+            async () =>
+            {
+                var childClosed = await settingsClose.RequestCloseAsync(_ =>
+                    Task.FromResult(SettingsCloseChoice.Save));
+                if (childClosed)
+                    settingsOpen = false;
+                return childClosed;
+            },
+            () => ownerOpen = false);
+
+        Assert.False(closed);
+        Assert.Equal(1, saveAttempts);
+        Assert.True(settingsOpen);
+        Assert.True(ownerOpen);
+        Assert.True(state.IsDirty);
+    }
+
+    [Fact]
+    public async Task OwnerShutdown_ConfirmedChildCloseClosesOwnerAfterChild()
+    {
+        var ownerShutdown = new SettingsOwnerShutdownCoordinator();
+        var order = new List<string>();
+
+        var closed = await ownerShutdown.RequestAsync(
+            () =>
+            {
+                order.Add("settings");
+                return Task.FromResult(true);
+            },
+            () => order.Add("owner"));
+
+        Assert.True(closed);
+        Assert.Equal(["settings", "owner"], order);
     }
 
     private static PowerModeSettings CreateSettings(string profileName, string ruleName) =>

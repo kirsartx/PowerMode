@@ -107,6 +107,30 @@ internal sealed record AuxiliaryLayoutProjection(
     IReadOnlyList<GridLengthProjection> Columns,
     IReadOnlyList<GridLengthProjection> Rows);
 
+internal readonly record struct RegionPlacement(int Row, int Column);
+
+internal enum SettingsAuxiliaryRegion
+{
+    ProfilesPrimaryEditor,
+    ProfilesSecondaryEditor,
+    RulesPrimaryEditor,
+    RulesSecondaryEditor
+}
+
+internal enum InsightsAuxiliaryRegion
+{
+    InsightsMetricsRegion,
+    InsightsTrendRegion
+}
+
+internal sealed record SettingsAuxiliaryLayoutProjection(
+    AuxiliaryLayoutProjection Layout,
+    IReadOnlyDictionary<SettingsAuxiliaryRegion, RegionPlacement> Regions);
+
+internal sealed record InsightsAuxiliaryLayoutProjection(
+    AuxiliaryLayoutProjection Layout,
+    IReadOnlyDictionary<InsightsAuxiliaryRegion, RegionPlacement> Regions);
+
 internal static class ResponsiveLayoutPolicy
 {
     public const double DefaultWidth = 1120;
@@ -194,6 +218,38 @@ internal static class ResponsiveLayoutPolicy
             stack
                 ? [GridLengthProjection.Auto, GridLengthProjection.Auto]
                 : [GridLengthProjection.Star, GridLengthProjection.Fixed(0)]);
+    }
+
+    public static SettingsAuxiliaryLayoutProjection ProjectSettingsAuxiliaryContent(
+        double logicalWidth)
+    {
+        var layout = ProjectAuxiliaryContent(logicalWidth);
+        var primary = new RegionPlacement(layout.FirstRow, layout.FirstColumn);
+        var secondary = new RegionPlacement(layout.SecondRow, layout.SecondColumn);
+        return new(
+            layout,
+            new Dictionary<SettingsAuxiliaryRegion, RegionPlacement>
+            {
+                [SettingsAuxiliaryRegion.ProfilesPrimaryEditor] = primary,
+                [SettingsAuxiliaryRegion.ProfilesSecondaryEditor] = secondary,
+                [SettingsAuxiliaryRegion.RulesPrimaryEditor] = primary,
+                [SettingsAuxiliaryRegion.RulesSecondaryEditor] = secondary
+            });
+    }
+
+    public static InsightsAuxiliaryLayoutProjection ProjectInsightsAuxiliaryContent(
+        double logicalWidth)
+    {
+        var layout = ProjectAuxiliaryContent(logicalWidth);
+        return new(
+            layout,
+            new Dictionary<InsightsAuxiliaryRegion, RegionPlacement>
+            {
+                [InsightsAuxiliaryRegion.InsightsMetricsRegion] =
+                    new(layout.FirstRow, layout.FirstColumn),
+                [InsightsAuxiliaryRegion.InsightsTrendRegion] =
+                    new(layout.SecondRow, layout.SecondColumn)
+            });
     }
 
     public static ResponsiveDashboardProjection Project(

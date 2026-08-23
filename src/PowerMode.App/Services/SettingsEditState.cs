@@ -43,6 +43,39 @@ internal sealed record SettingsSaveResult(bool Succeeded, string? Error = null)
     public static SettingsSaveResult Success { get; } = new(true);
 }
 
+internal readonly record struct ProfileDraftSelectionResult(
+    bool Accepted,
+    bool DraftDirty,
+    bool InputValid);
+
+internal sealed class ProfileDraftSelectionCoordinator
+{
+    public ProfileDraftSelectionResult Apply(
+        bool draftDirty,
+        bool inputValid,
+        Action stageDraft,
+        Action restorePreviousSelection,
+        Action displayRequestedProfile,
+        Func<bool> revalidate)
+    {
+        ArgumentNullException.ThrowIfNull(stageDraft);
+        ArgumentNullException.ThrowIfNull(restorePreviousSelection);
+        ArgumentNullException.ThrowIfNull(displayRequestedProfile);
+        ArgumentNullException.ThrowIfNull(revalidate);
+
+        if (draftDirty && !inputValid)
+        {
+            restorePreviousSelection();
+            return new(false, true, false);
+        }
+
+        if (draftDirty)
+            stageDraft();
+        displayRequestedProfile();
+        return new(true, false, revalidate());
+    }
+}
+
 internal sealed class SettingsEditSession
 {
     private readonly Func<PowerModeSettings, CancellationToken, Task> _persistAsync;
@@ -82,6 +115,22 @@ internal sealed class SettingsEditSession
             return false;
 
         Mutate(mutation);
+        return true;
+    }
+
+    public bool RemoveProfileWhenConfirmed(
+        CustomPowerProfile selected,
+        bool confirmed)
+    {
+        ArgumentNullException.ThrowIfNull(selected);
+        if (!confirmed)
+            return false;
+
+        var index = WorkingCopy.Profiles.IndexOf(selected);
+        if (index < 0)
+            return false;
+        WorkingCopy.Profiles.RemoveAt(index);
+        State.MarkChanged();
         return true;
     }
 
@@ -161,6 +210,34 @@ internal sealed class SettingsCloseCoordinator
                 SettingsCloseAction.CloseWithoutSaving => true,
                 _ => false
             };
+        }
+        finally
+        {
+            _requestInProgress = false;
+        }
+    }
+}
+
+internal sealed class SettingsOwnerShutdownCoordinator
+{
+    private bool _requestInProgress;
+
+    public async Task<bool> RequestAsync(
+        Func<Task<bool>> requestSettingsCloseAsync,
+        Action closeOwner)
+    {
+        ArgumentNullException.ThrowIfNull(requestSettingsCloseAsync);
+        ArgumentNullException.ThrowIfNull(closeOwner);
+        if (_requestInProgress)
+            return false;
+
+        _requestInProgress = true;
+        try
+        {
+            if (!await requestSettingsCloseAsync())
+                return false;
+            closeOwner();
+            return true;
         }
         finally
         {

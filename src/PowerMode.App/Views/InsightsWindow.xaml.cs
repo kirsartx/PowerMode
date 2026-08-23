@@ -227,27 +227,30 @@ public sealed partial class InsightsWindow : Window
         if (e.NewSize.Width <= 0)
             return;
         ApplyAuxiliaryLayout(
-            ResponsiveLayoutPolicy.ProjectAuxiliaryContent(e.NewSize.Width));
+            ResponsiveLayoutPolicy.ProjectInsightsAuxiliaryContent(e.NewSize.Width));
     }
 
-    private void ApplyAuxiliaryLayout(AuxiliaryLayoutProjection projection)
+    private void ApplyAuxiliaryLayout(InsightsAuxiliaryLayoutProjection projection)
     {
+        var layout = projection.Layout;
         InsightsOverviewGrid.ColumnDefinitions[0].Width = new GridLength(
             1,
             GridUnitType.Star);
-        InsightsOverviewGrid.ColumnDefinitions[1].Width = projection.Stack
+        InsightsOverviewGrid.ColumnDefinitions[1].Width = layout.Stack
             ? new GridLength(0)
             : new GridLength(2, GridUnitType.Star);
-        InsightsOverviewGrid.RowDefinitions[0].Height = projection.Stack
+        InsightsOverviewGrid.RowDefinitions[0].Height = layout.Stack
             ? GridLength.Auto
             : new GridLength(1, GridUnitType.Star);
-        InsightsOverviewGrid.RowDefinitions[1].Height = projection.Stack
+        InsightsOverviewGrid.RowDefinitions[1].Height = layout.Stack
             ? GridLength.Auto
             : new GridLength(0);
-        Grid.SetRow(InsightsMetricsRegion, projection.FirstRow);
-        Grid.SetColumn(InsightsMetricsRegion, projection.FirstColumn);
-        Grid.SetRow(InsightsTrendRegion, projection.SecondRow);
-        Grid.SetColumn(InsightsTrendRegion, projection.SecondColumn);
+        var metrics = projection.Regions[InsightsAuxiliaryRegion.InsightsMetricsRegion];
+        var trend = projection.Regions[InsightsAuxiliaryRegion.InsightsTrendRegion];
+        Grid.SetRow(InsightsMetricsRegion, metrics.Row);
+        Grid.SetColumn(InsightsMetricsRegion, metrics.Column);
+        Grid.SetRow(InsightsTrendRegion, trend.Row);
+        Grid.SetColumn(InsightsTrendRegion, trend.Column);
     }
 
     private async Task RefreshHistoryAsync()

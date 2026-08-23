@@ -111,27 +111,47 @@ public sealed class SettingsWindowPresentationTests
         Assert.Contains("SaveAsync", source);
         Assert.DoesNotContain("PersistSettingsAsync", source);
         Assert.DoesNotContain("_settingsWindow?.Close()", mainSource);
-        Assert.Contains("await settingsWindow.RequestCloseAsync()", mainSource);
+        Assert.Contains("SettingsOwnerShutdownCoordinator", mainSource);
+        Assert.Contains("_settingsOwnerShutdownCoordinator.RequestAsync", mainSource);
         Assert.Contains("SettingsWindowStrings.On(_zh)", source);
         Assert.Contains("SettingsWindowStrings.Off(_zh)", source);
         Assert.Empty(Regex.Matches(source, @"SettingsStore\.Save\s*\(").Cast<Match>());
     }
 
-    [Fact]
-    public void SettingsAndInsights_ApplyAuxiliaryProjectionToNamedRegions()
+    [Theory]
+    [InlineData(759, 1, 0)]
+    [InlineData(760, 0, 1)]
+    public void SettingsAuxiliaryProjection_PlacesBothNamedEditorPairs(
+        double width,
+        int secondaryRow,
+        int secondaryColumn)
     {
-        var settings = File.ReadAllText(FindRepositoryFile(
-            "src", "PowerMode.App", "Views", "SettingsWindow.xaml.cs"));
-        var insights = File.ReadAllText(FindRepositoryFile(
-            "src", "PowerMode.App", "Views", "InsightsWindow.xaml.cs"));
+        var projection = ResponsiveLayoutPolicy.ProjectSettingsAuxiliaryContent(width);
 
-        Assert.Contains("ResponsiveLayoutPolicy.ProjectAuxiliaryContent(e.NewSize.Width)", settings);
-        Assert.Contains("ProfilesEditorGrid", settings);
-        Assert.Contains("RulesEditorGrid", settings);
-        Assert.Contains("Grid.SetRow(second, projection.SecondRow)", settings);
-        Assert.Contains("ResponsiveLayoutPolicy.ProjectAuxiliaryContent(e.NewSize.Width)", insights);
-        Assert.Contains("Grid.SetRow(InsightsMetricsRegion, projection.FirstRow)", insights);
-        Assert.Contains("Grid.SetRow(InsightsTrendRegion, projection.SecondRow)", insights);
+        Assert.Equal(new RegionPlacement(0, 0),
+            projection.Regions[SettingsAuxiliaryRegion.ProfilesPrimaryEditor]);
+        Assert.Equal(new RegionPlacement(secondaryRow, secondaryColumn),
+            projection.Regions[SettingsAuxiliaryRegion.ProfilesSecondaryEditor]);
+        Assert.Equal(new RegionPlacement(0, 0),
+            projection.Regions[SettingsAuxiliaryRegion.RulesPrimaryEditor]);
+        Assert.Equal(new RegionPlacement(secondaryRow, secondaryColumn),
+            projection.Regions[SettingsAuxiliaryRegion.RulesSecondaryEditor]);
+    }
+
+    [Theory]
+    [InlineData(759, 1, 0)]
+    [InlineData(760, 0, 1)]
+    public void InsightsAuxiliaryProjection_PlacesNamedMetricAndTrendRegions(
+        double width,
+        int trendRow,
+        int trendColumn)
+    {
+        var projection = ResponsiveLayoutPolicy.ProjectInsightsAuxiliaryContent(width);
+
+        Assert.Equal(new RegionPlacement(0, 0),
+            projection.Regions[InsightsAuxiliaryRegion.InsightsMetricsRegion]);
+        Assert.Equal(new RegionPlacement(trendRow, trendColumn),
+            projection.Regions[InsightsAuxiliaryRegion.InsightsTrendRegion]);
     }
 
     private static XElement NamedElement(XDocument document, string name) =>

@@ -16,6 +16,7 @@ public sealed partial class SettingsWindow : Window
     private readonly SystemIntegrationService _systemIntegration;
     private readonly SettingsEditSession _editSession;
     private readonly SettingsCloseCoordinator _closeCoordinator;
+    private readonly ProfileDraftSelectionCoordinator _profileSelectionCoordinator = new();
     private bool _loading;
     private bool _allowClose;
     private bool _profileDraftDirty;
@@ -328,18 +329,23 @@ public sealed partial class SettingsWindow : Window
     {
         if (e.NewSize.Width <= 0)
             return;
-        var projection = ResponsiveLayoutPolicy.ProjectAuxiliaryContent(e.NewSize.Width);
+        var projection = ResponsiveLayoutPolicy.ProjectSettingsAuxiliaryContent(
+            e.NewSize.Width);
         ApplyAuxiliaryLayout(
             ProfilesEditorGrid,
             ProfilesPrimaryEditor,
             ProfilesSecondaryEditor,
-            projection,
+            projection.Layout,
+            projection.Regions[SettingsAuxiliaryRegion.ProfilesPrimaryEditor],
+            projection.Regions[SettingsAuxiliaryRegion.ProfilesSecondaryEditor],
             firstColumnWidth: null);
         ApplyAuxiliaryLayout(
             RulesEditorGrid,
             RulesPrimaryEditor,
             RulesSecondaryEditor,
-            projection,
+            projection.Layout,
+            projection.Regions[SettingsAuxiliaryRegion.RulesPrimaryEditor],
+            projection.Regions[SettingsAuxiliaryRegion.RulesSecondaryEditor],
             firstColumnWidth: 280);
     }
 
@@ -348,6 +354,8 @@ public sealed partial class SettingsWindow : Window
         FrameworkElement first,
         FrameworkElement second,
         AuxiliaryLayoutProjection projection,
+        RegionPlacement firstPlacement,
+        RegionPlacement secondPlacement,
         double? firstColumnWidth)
     {
         grid.ColumnDefinitions[0].Width = projection.Stack
@@ -364,10 +372,10 @@ public sealed partial class SettingsWindow : Window
         grid.RowDefinitions[1].Height = projection.Stack
             ? GridLength.Auto
             : new GridLength(0);
-        Grid.SetRow(first, projection.FirstRow);
-        Grid.SetColumn(first, projection.FirstColumn);
-        Grid.SetRow(second, projection.SecondRow);
-        Grid.SetColumn(second, projection.SecondColumn);
+        Grid.SetRow(first, firstPlacement.Row);
+        Grid.SetColumn(first, firstPlacement.Column);
+        Grid.SetRow(second, secondPlacement.Row);
+        Grid.SetColumn(second, secondPlacement.Column);
     }
 
     private void InitializeRuleEditor()
@@ -469,11 +477,28 @@ public sealed partial class SettingsWindow : Window
     {
         if (_loading)
             return;
-        if (_profileDraftDirty && ValidateInputs())
-            StageProfileDraft();
-        if (ProfileCombo.SelectedItem is CustomPowerProfile profile)
-            ShowProfile(profile);
-        _profileDraftDirty = false;
+
+        var previous = e.RemovedItems.OfType<CustomPowerProfile>().FirstOrDefault();
+        var requested = e.AddedItems.OfType<CustomPowerProfile>().FirstOrDefault();
+        var result = _profileSelectionCoordinator.Apply(
+            _profileDraftDirty,
+            ValidateInputs(),
+            StageProfileDraft,
+            () =>
+            {
+                _loading = true;
+                ProfileCombo.SelectedItem = previous;
+                _loading = false;
+            },
+            () =>
+            {
+                if (requested is not null)
+                    ShowProfile(requested);
+            },
+            ValidateInputs);
+        _profileDraftDirty = result.DraftDirty;
+        _editSession.State.SetInputValid(result.InputValid);
+        SaveButton.IsEnabled = _editSession.State.CanSave;
     }
 
     private void ProfileSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
@@ -535,11 +560,7 @@ public sealed partial class SettingsWindow : Window
             DefaultButton = ContentDialogButton.Close
         };
         var confirmed = await dialog.ShowAsync() == ContentDialogResult.Primary;
-        if (!_editSession.MutateWhenConfirmed(
-                confirmed,
-                settings => settings.Profiles.RemoveAll(candidate =>
-                    ReferenceEquals(candidate, profile) ||
-                    candidate.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))))
+        if (!_editSession.RemoveProfileWhenConfirmed(profile, confirmed))
             return;
         LoadSettings();
         ShowSaved(_zh ? "预设删除等待保存" : "Profile deletion is ready to save");

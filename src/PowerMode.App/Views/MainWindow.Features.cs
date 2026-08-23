@@ -26,7 +26,7 @@ public sealed partial class MainWindow
     private bool _globalHotkeysAvailable;
     private bool _closingAfterRestore;
     private bool _exitRestoreInProgress;
-    private bool _settingsCloseInProgress;
+    private readonly SettingsOwnerShutdownCoordinator _settingsOwnerShutdownCoordinator = new();
     private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
     private HardwareCapabilityService? _hardwareCapabilityService;
     private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
@@ -203,14 +203,16 @@ public sealed partial class MainWindow
         if (_settingsWindow is { } settingsWindow)
         {
             args.Cancel = true;
-            if (_settingsCloseInProgress)
-                return;
-
-            _settingsCloseInProgress = true;
-            bool canClose;
             try
             {
-                canClose = await settingsWindow.RequestCloseAsync();
+                await _settingsOwnerShutdownCoordinator.RequestAsync(
+                    settingsWindow.RequestCloseAsync,
+                    () =>
+                    {
+                        if (ReferenceEquals(_settingsWindow, settingsWindow))
+                            _settingsWindow = null;
+                        Close();
+                    });
             }
             catch (Exception exception)
             {
@@ -221,16 +223,6 @@ public sealed partial class MainWindow
                     : "The Settings window could not be closed safely.";
                 return;
             }
-            finally
-            {
-                _settingsCloseInProgress = false;
-            }
-            if (!canClose)
-                return;
-
-            if (ReferenceEquals(_settingsWindow, settingsWindow))
-                _settingsWindow = null;
-            Close();
             return;
         }
 

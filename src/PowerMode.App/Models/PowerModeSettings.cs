@@ -183,7 +183,7 @@ public static class SettingsStore
     public static PowerModeSettings Clone(PowerModeSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        return DeserializeStrict(JsonSerializer.Serialize(Normalize(settings), JsonOptions));
+        return DeserializeStrict(JsonSerializer.Serialize(settings, JsonOptions));
     }
     public static void Export(PowerModeSettings settings, string path) { lock(FileGate)File.WriteAllText(path, JsonSerializer.Serialize(Normalize(settings), JsonOptions)); }
     public static PowerModeSettings Import(string path) { lock(FileGate)return Normalize(JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(path), JsonOptions)); }
