@@ -329,54 +329,13 @@ public sealed partial class SettingsWindow : Window
     {
         if (e.NewSize.Width <= 0)
             return;
-        var projection = ResponsiveLayoutPolicy.ProjectSettingsAuxiliaryContent(
-            e.NewSize.Width);
-        ApplyAuxiliaryLayout(
-            ProfilesEditorGrid,
-            ProfilesPrimaryEditor,
-            ProfilesSecondaryEditor,
-            projection.Layout,
-            projection.Regions[SettingsAuxiliaryRegion.ProfilesPrimaryEditor],
-            projection.Regions[SettingsAuxiliaryRegion.ProfilesSecondaryEditor],
-            firstColumnWidth: null);
-        ApplyAuxiliaryLayout(
-            RulesEditorGrid,
-            RulesPrimaryEditor,
-            RulesSecondaryEditor,
-            projection.Layout,
-            projection.Regions[SettingsAuxiliaryRegion.RulesPrimaryEditor],
-            projection.Regions[SettingsAuxiliaryRegion.RulesSecondaryEditor],
-            firstColumnWidth: 280);
+        ApplyAuxiliaryLayout(e.NewSize.Width);
     }
 
-    private static void ApplyAuxiliaryLayout(
-        Grid grid,
-        FrameworkElement first,
-        FrameworkElement second,
-        AuxiliaryLayoutProjection projection,
-        RegionPlacement firstPlacement,
-        RegionPlacement secondPlacement,
-        double? firstColumnWidth)
-    {
-        grid.ColumnDefinitions[0].Width = projection.Stack
-            ? new GridLength(1, GridUnitType.Star)
-            : firstColumnWidth.HasValue
-                ? new GridLength(firstColumnWidth.Value)
-                : new GridLength(1, GridUnitType.Star);
-        grid.ColumnDefinitions[1].Width = projection.Stack
-            ? new GridLength(0)
-            : new GridLength(1, GridUnitType.Star);
-        grid.RowDefinitions[0].Height = projection.Stack
-            ? GridLength.Auto
-            : new GridLength(1, GridUnitType.Star);
-        grid.RowDefinitions[1].Height = projection.Stack
-            ? GridLength.Auto
-            : new GridLength(0);
-        Grid.SetRow(first, firstPlacement.Row);
-        Grid.SetColumn(first, firstPlacement.Column);
-        Grid.SetRow(second, secondPlacement.Row);
-        Grid.SetColumn(second, secondPlacement.Column);
-    }
+    private void ApplyAuxiliaryLayout(double logicalWidth) =>
+        SettingsAuxiliaryGridLayout.Apply(
+            logicalWidth,
+            new WinUiAuxiliaryGridSurface(Root));
 
     private void InitializeRuleEditor()
     {

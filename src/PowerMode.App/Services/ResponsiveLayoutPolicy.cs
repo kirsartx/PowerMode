@@ -109,28 +109,6 @@ internal sealed record AuxiliaryLayoutProjection(
 
 internal readonly record struct RegionPlacement(int Row, int Column);
 
-internal enum SettingsAuxiliaryRegion
-{
-    ProfilesPrimaryEditor,
-    ProfilesSecondaryEditor,
-    RulesPrimaryEditor,
-    RulesSecondaryEditor
-}
-
-internal enum InsightsAuxiliaryRegion
-{
-    InsightsMetricsRegion,
-    InsightsTrendRegion
-}
-
-internal sealed record SettingsAuxiliaryLayoutProjection(
-    AuxiliaryLayoutProjection Layout,
-    IReadOnlyDictionary<SettingsAuxiliaryRegion, RegionPlacement> Regions);
-
-internal sealed record InsightsAuxiliaryLayoutProjection(
-    AuxiliaryLayoutProjection Layout,
-    IReadOnlyDictionary<InsightsAuxiliaryRegion, RegionPlacement> Regions);
-
 internal static class ResponsiveLayoutPolicy
 {
     public const double DefaultWidth = 1120;
@@ -227,14 +205,32 @@ internal static class ResponsiveLayoutPolicy
         var primary = new RegionPlacement(layout.FirstRow, layout.FirstColumn);
         var secondary = new RegionPlacement(layout.SecondRow, layout.SecondColumn);
         return new(
-            layout,
-            new Dictionary<SettingsAuxiliaryRegion, RegionPlacement>
-            {
-                [SettingsAuxiliaryRegion.ProfilesPrimaryEditor] = primary,
-                [SettingsAuxiliaryRegion.ProfilesSecondaryEditor] = secondary,
-                [SettingsAuxiliaryRegion.RulesPrimaryEditor] = primary,
-                [SettingsAuxiliaryRegion.RulesSecondaryEditor] = secondary
-            });
+            [
+                new AuxiliaryGridProjection(
+                    AuxiliaryGridId.ProfilesEditorGrid,
+                    layout.Columns,
+                    layout.Rows,
+                    new Dictionary<AuxiliaryRegionId, RegionPlacement>
+                    {
+                        [AuxiliaryRegionId.ProfilesPrimaryEditor] = primary,
+                        [AuxiliaryRegionId.ProfilesSecondaryEditor] = secondary
+                    }),
+                new AuxiliaryGridProjection(
+                    AuxiliaryGridId.RulesEditorGrid,
+                    layout.Stack
+                        ? layout.Columns
+                        :
+                        [
+                            GridLengthProjection.Fixed(280),
+                            GridLengthProjection.Star
+                        ],
+                    layout.Rows,
+                    new Dictionary<AuxiliaryRegionId, RegionPlacement>
+                    {
+                        [AuxiliaryRegionId.RulesPrimaryEditor] = primary,
+                        [AuxiliaryRegionId.RulesSecondaryEditor] = secondary
+                    })
+            ]);
     }
 
     public static InsightsAuxiliaryLayoutProjection ProjectInsightsAuxiliaryContent(
@@ -242,14 +238,27 @@ internal static class ResponsiveLayoutPolicy
     {
         var layout = ProjectAuxiliaryContent(logicalWidth);
         return new(
-            layout,
-            new Dictionary<InsightsAuxiliaryRegion, RegionPlacement>
-            {
-                [InsightsAuxiliaryRegion.InsightsMetricsRegion] =
-                    new(layout.FirstRow, layout.FirstColumn),
-                [InsightsAuxiliaryRegion.InsightsTrendRegion] =
-                    new(layout.SecondRow, layout.SecondColumn)
-            });
+            [
+                new AuxiliaryGridProjection(
+                    AuxiliaryGridId.InsightsOverviewGrid,
+                    layout.Stack
+                        ? layout.Columns
+                        :
+                        [
+                            GridLengthProjection.Star,
+                            new GridLengthProjection(
+                                GridLengthProjectionKind.Star,
+                                2)
+                        ],
+                    layout.Rows,
+                    new Dictionary<AuxiliaryRegionId, RegionPlacement>
+                    {
+                        [AuxiliaryRegionId.InsightsMetricsRegion] =
+                            new(layout.FirstRow, layout.FirstColumn),
+                        [AuxiliaryRegionId.InsightsTrendRegion] =
+                            new(layout.SecondRow, layout.SecondColumn)
+                    })
+            ]);
     }
 
     public static ResponsiveDashboardProjection Project(

@@ -226,32 +226,13 @@ public sealed partial class InsightsWindow : Window
     {
         if (e.NewSize.Width <= 0)
             return;
-        ApplyAuxiliaryLayout(
-            ResponsiveLayoutPolicy.ProjectInsightsAuxiliaryContent(e.NewSize.Width));
+        ApplyAuxiliaryLayout(e.NewSize.Width);
     }
 
-    private void ApplyAuxiliaryLayout(InsightsAuxiliaryLayoutProjection projection)
-    {
-        var layout = projection.Layout;
-        InsightsOverviewGrid.ColumnDefinitions[0].Width = new GridLength(
-            1,
-            GridUnitType.Star);
-        InsightsOverviewGrid.ColumnDefinitions[1].Width = layout.Stack
-            ? new GridLength(0)
-            : new GridLength(2, GridUnitType.Star);
-        InsightsOverviewGrid.RowDefinitions[0].Height = layout.Stack
-            ? GridLength.Auto
-            : new GridLength(1, GridUnitType.Star);
-        InsightsOverviewGrid.RowDefinitions[1].Height = layout.Stack
-            ? GridLength.Auto
-            : new GridLength(0);
-        var metrics = projection.Regions[InsightsAuxiliaryRegion.InsightsMetricsRegion];
-        var trend = projection.Regions[InsightsAuxiliaryRegion.InsightsTrendRegion];
-        Grid.SetRow(InsightsMetricsRegion, metrics.Row);
-        Grid.SetColumn(InsightsMetricsRegion, metrics.Column);
-        Grid.SetRow(InsightsTrendRegion, trend.Row);
-        Grid.SetColumn(InsightsTrendRegion, trend.Column);
-    }
+    private void ApplyAuxiliaryLayout(double logicalWidth) =>
+        InsightsAuxiliaryGridLayout.Apply(
+            logicalWidth,
+            new WinUiAuxiliaryGridSurface(Root));
 
     private async Task RefreshHistoryAsync()
     {

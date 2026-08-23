@@ -119,39 +119,204 @@ public sealed class SettingsWindowPresentationTests
     }
 
     [Theory]
-    [InlineData(759, 1, 0)]
-    [InlineData(760, 0, 1)]
-    public void SettingsAuxiliaryProjection_PlacesBothNamedEditorPairs(
+    [InlineData(759, true)]
+    [InlineData(760, false)]
+    public void SettingsAuxiliaryGridLayout_AppliesEveryNamedGridAndRegion(
         double width,
-        int secondaryRow,
-        int secondaryColumn)
+        bool stack)
     {
-        var projection = ResponsiveLayoutPolicy.ProjectSettingsAuxiliaryContent(width);
+        var surface = RecordingAuxiliaryGridSurface.FromXaml(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "SettingsWindow.xaml"));
 
-        Assert.Equal(new RegionPlacement(0, 0),
-            projection.Regions[SettingsAuxiliaryRegion.ProfilesPrimaryEditor]);
-        Assert.Equal(new RegionPlacement(secondaryRow, secondaryColumn),
-            projection.Regions[SettingsAuxiliaryRegion.ProfilesSecondaryEditor]);
-        Assert.Equal(new RegionPlacement(0, 0),
-            projection.Regions[SettingsAuxiliaryRegion.RulesPrimaryEditor]);
-        Assert.Equal(new RegionPlacement(secondaryRow, secondaryColumn),
-            projection.Regions[SettingsAuxiliaryRegion.RulesSecondaryEditor]);
+        SettingsAuxiliaryGridLayout.Apply(width, surface);
+
+        Assert.Equal(2, surface.Columns.Count);
+        Assert.Equal(2, surface.Rows.Count);
+        var stackedColumns = new[]
+        {
+            GridLengthProjection.Star,
+            GridLengthProjection.Fixed(0)
+        };
+        var rows = stack
+            ? new[] { GridLengthProjection.Auto, GridLengthProjection.Auto }
+            : new[] { GridLengthProjection.Star, GridLengthProjection.Fixed(0) };
+        AssertGrid(
+            surface,
+            AuxiliaryGridId.ProfilesEditorGrid,
+            stack
+                ? stackedColumns
+                : [GridLengthProjection.Star, GridLengthProjection.Star],
+            rows);
+        AssertGrid(
+            surface,
+            AuxiliaryGridId.RulesEditorGrid,
+            stack
+                ? stackedColumns
+                : [GridLengthProjection.Fixed(280), GridLengthProjection.Star],
+            rows);
+        Assert.Equal(4, surface.Placements.Count);
+        AssertPlacement(surface, AuxiliaryGridId.ProfilesEditorGrid,
+            AuxiliaryRegionId.ProfilesPrimaryEditor, 0, 0);
+        AssertPlacement(surface, AuxiliaryGridId.ProfilesEditorGrid,
+            AuxiliaryRegionId.ProfilesSecondaryEditor, stack ? 1 : 0, stack ? 0 : 1);
+        AssertPlacement(surface, AuxiliaryGridId.RulesEditorGrid,
+            AuxiliaryRegionId.RulesPrimaryEditor, 0, 0);
+        AssertPlacement(surface, AuxiliaryGridId.RulesEditorGrid,
+            AuxiliaryRegionId.RulesSecondaryEditor, stack ? 1 : 0, stack ? 0 : 1);
     }
 
     [Theory]
-    [InlineData(759, 1, 0)]
-    [InlineData(760, 0, 1)]
-    public void InsightsAuxiliaryProjection_PlacesNamedMetricAndTrendRegions(
+    [InlineData(759, true)]
+    [InlineData(760, false)]
+    public void InsightsAuxiliaryGridLayout_AppliesEveryNamedGridAndRegion(
         double width,
-        int trendRow,
-        int trendColumn)
+        bool stack)
     {
-        var projection = ResponsiveLayoutPolicy.ProjectInsightsAuxiliaryContent(width);
+        var surface = RecordingAuxiliaryGridSurface.FromXaml(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "InsightsWindow.xaml"));
 
-        Assert.Equal(new RegionPlacement(0, 0),
-            projection.Regions[InsightsAuxiliaryRegion.InsightsMetricsRegion]);
-        Assert.Equal(new RegionPlacement(trendRow, trendColumn),
-            projection.Regions[InsightsAuxiliaryRegion.InsightsTrendRegion]);
+        InsightsAuxiliaryGridLayout.Apply(width, surface);
+
+        Assert.Single(surface.Columns);
+        Assert.Single(surface.Rows);
+        AssertGrid(
+            surface,
+            AuxiliaryGridId.InsightsOverviewGrid,
+            stack
+                ? [GridLengthProjection.Star, GridLengthProjection.Fixed(0)]
+                :
+                [
+                    GridLengthProjection.Star,
+                    new GridLengthProjection(GridLengthProjectionKind.Star, 2)
+                ],
+            stack
+                ? [GridLengthProjection.Auto, GridLengthProjection.Auto]
+                : [GridLengthProjection.Star, GridLengthProjection.Fixed(0)]);
+        Assert.Equal(2, surface.Placements.Count);
+        AssertPlacement(surface, AuxiliaryGridId.InsightsOverviewGrid,
+            AuxiliaryRegionId.InsightsMetricsRegion, 0, 0);
+        AssertPlacement(surface, AuxiliaryGridId.InsightsOverviewGrid,
+            AuxiliaryRegionId.InsightsTrendRegion, stack ? 1 : 0, stack ? 0 : 1);
+    }
+
+    private static void AssertGrid(
+        RecordingAuxiliaryGridSurface surface,
+        AuxiliaryGridId grid,
+        IReadOnlyList<GridLengthProjection> columns,
+        IReadOnlyList<GridLengthProjection> rows)
+    {
+        Assert.Equal(columns, surface.Columns[grid]);
+        Assert.Equal(rows, surface.Rows[grid]);
+    }
+
+    private static void AssertPlacement(
+        RecordingAuxiliaryGridSurface surface,
+        AuxiliaryGridId grid,
+        AuxiliaryRegionId region,
+        int row,
+        int column) =>
+        Assert.Equal(
+            new RegionPlacement(row, column),
+            surface.Placements[(grid, region)]);
+
+    private sealed class RecordingAuxiliaryGridSurface : IAuxiliaryGridSurface
+    {
+        private readonly IReadOnlyDictionary<string, XElement> _declaredElements;
+
+        private RecordingAuxiliaryGridSurface(
+            IReadOnlyDictionary<string, XElement> declaredElements) =>
+            _declaredElements = declaredElements;
+
+        public Dictionary<AuxiliaryGridId, IReadOnlyList<GridLengthProjection>> Columns
+        {
+            get;
+        } = [];
+
+        public Dictionary<AuxiliaryGridId, IReadOnlyList<GridLengthProjection>> Rows
+        {
+            get;
+        } = [];
+
+        public Dictionary<(AuxiliaryGridId Grid, AuxiliaryRegionId Region), RegionPlacement>
+            Placements { get; } = [];
+
+        public static RecordingAuxiliaryGridSurface FromXaml(string path)
+        {
+            var document = XDocument.Load(path);
+            return new(document.Descendants()
+                .Where(element => element.Attribute(Xaml + "Name") is not null)
+                .ToDictionary(
+                    element => (string)element.Attribute(Xaml + "Name")!,
+                    StringComparer.Ordinal));
+        }
+
+        public void SetColumnDefinitions(
+            AuxiliaryGridId grid,
+            IReadOnlyList<GridLengthProjection> columns)
+        {
+            var element = RequireGrid(grid);
+            RequireDefinitionCount(element, "Grid.ColumnDefinitions", columns.Count);
+            Columns.Add(grid, columns.ToArray());
+        }
+
+        public void SetRowDefinitions(
+            AuxiliaryGridId grid,
+            IReadOnlyList<GridLengthProjection> rows)
+        {
+            var element = RequireGrid(grid);
+            RequireDefinitionCount(element, "Grid.RowDefinitions", rows.Count);
+            Rows.Add(grid, rows.ToArray());
+        }
+
+        public void SetRegionPlacement(
+            AuxiliaryGridId grid,
+            AuxiliaryRegionId region,
+            RegionPlacement placement)
+        {
+            _ = RequireGrid(grid);
+            var element = RequireDeclared(region.ToString());
+            if (!element.Ancestors().Any(ancestor =>
+                    (string?)ancestor.Attribute(Xaml + "Name") == grid.ToString()))
+            {
+                throw new InvalidOperationException(
+                    $"Region '{region}' is not declared inside grid '{grid}'.");
+            }
+            Placements.Add((grid, region), placement);
+        }
+
+        private XElement RequireGrid(AuxiliaryGridId grid)
+        {
+            var element = RequireDeclared(grid.ToString());
+            if (element.Name.LocalName != "Grid")
+            {
+                throw new InvalidOperationException(
+                    $"Auxiliary grid '{grid}' is declared as '{element.Name.LocalName}'.");
+            }
+
+            return element;
+        }
+
+        private XElement RequireDeclared(string name) =>
+            _declaredElements.TryGetValue(name, out var element)
+                ? element
+                : throw new InvalidOperationException(
+                    $"The production auxiliary layout references undeclared XAML element '{name}'.");
+
+        private static void RequireDefinitionCount(
+            XElement grid,
+            string definitionsName,
+            int expectedCount)
+        {
+            var definitions = grid.Elements()
+                .SingleOrDefault(element => element.Name.LocalName == definitionsName);
+            var actualCount = definitions?.Elements().Count() ?? 0;
+            if (actualCount != expectedCount)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{(string?)grid.Attribute(Xaml + "Name")}' declares " +
+                    $"{actualCount} {definitionsName}; expected {expectedCount}.");
+            }
+        }
     }
 
     private static XElement NamedElement(XDocument document, string name) =>
