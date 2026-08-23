@@ -18,7 +18,6 @@ public sealed partial class InsightsWindow : Window
     private readonly bool _ownsSystemIntegrationService;
     private readonly bool _isChinese;
     private readonly Func<string>? _sessionLogProvider;
-    private readonly DispatcherTimer _fallbackRefreshTimer = new();
     private bool _refreshing;
     private bool _loaded;
     private PowerTelemetrySample? _latestSample;
@@ -47,8 +46,6 @@ public sealed partial class InsightsWindow : Window
             AppWindow.SetIcon(iconPath);
         ApplyLanguage();
 
-        _fallbackRefreshTimer.Interval = TimeSpan.FromSeconds(10);
-        _fallbackRefreshTimer.Tick += FallbackRefreshTimer_Tick;
         _monitoringService.SampleAvailable += MonitoringService_SampleAvailable;
         _monitoringService.SamplingFailed += MonitoringService_SamplingFailed;
         Closed += InsightsWindow_Closed;
@@ -61,14 +58,15 @@ public sealed partial class InsightsWindow : Window
         _loaded = true;
 
         await RefreshHistoryAsync();
-        var previous = _monitoringService.History.Snapshot().LastOrDefault();
-        if (previous is not null)
+        if (_monitoringService.TryGetRecentSample(
+                TimeSpan.FromMinutes(1),
+                out var previous))
+        {
             RenderSample(previous);
+        }
         RenderTrend();
 
-        if (!_monitoringService.IsMonitoring)
-            _fallbackRefreshTimer.Start();
-        await RefreshSampleAsync(showSuccess: false);
+        await RefreshSampleAsync(showSuccess: false, maximumAge: TimeSpan.FromSeconds(10));
     }
 
     private void ApplyLanguage()
@@ -102,14 +100,11 @@ public sealed partial class InsightsWindow : Window
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        await RefreshSampleAsync(showSuccess: true);
+        await RefreshSampleAsync(showSuccess: true, maximumAge: TimeSpan.Zero);
         await RefreshHistoryAsync();
     }
 
-    private async void FallbackRefreshTimer_Tick(object? sender, object e) =>
-        await RefreshSampleAsync(showSuccess: false);
-
-    private async Task RefreshSampleAsync(bool showSuccess)
+    private async Task RefreshSampleAsync(bool showSuccess, TimeSpan maximumAge)
     {
         if (_refreshing)
             return;
@@ -118,7 +113,7 @@ public sealed partial class InsightsWindow : Window
         RefreshButton.IsEnabled = false;
         try
         {
-            var sample = await _monitoringService.SampleAsync();
+            var sample = await _monitoringService.GetOrSampleAsync(maximumAge);
             RenderSample(sample);
             if (showSuccess)
                 ShowStatus(_isChinese ? "数据已刷新。" : "Telemetry refreshed.", InfoBarSeverity.Success);
@@ -451,8 +446,6 @@ public sealed partial class InsightsWindow : Window
 
     private async void InsightsWindow_Closed(object sender, WindowEventArgs args)
     {
-        _fallbackRefreshTimer.Stop();
-        _fallbackRefreshTimer.Tick -= FallbackRefreshTimer_Tick;
         _monitoringService.SampleAvailable -= MonitoringService_SampleAvailable;
         _monitoringService.SamplingFailed -= MonitoringService_SamplingFailed;
         if (_ownsMonitoringService)

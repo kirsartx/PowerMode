@@ -7,7 +7,7 @@ namespace PowerModeWinUI;
 public sealed partial class MainWindow
 {
     private readonly AutomationEngine _automationEngine = new();
-    private readonly MonitoringService _monitoringService = new(720);
+    private readonly MonitoringService _monitoringService;
     private readonly SystemIntegrationService _systemIntegration = new(
         "PowerMode",
         dataDirectory: SettingsStore.DirectoryPath);

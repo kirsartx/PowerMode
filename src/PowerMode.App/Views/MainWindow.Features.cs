@@ -429,6 +429,7 @@ public sealed partial class MainWindow
                 .Run(()=>_hardwareCapabilityService.DetectAsync(
                     TimeSpan.FromSeconds(2),_capabilityPresentationLifetime.Token))
                 .ConfigureAwait(false);
+            _monitoringService.UpdateCapabilities(capabilities);
             void Apply()
             {
                 _capabilityPresentationLifetime.TryApply(()=>

@@ -76,6 +76,7 @@ public sealed partial class MainWindow : Window
         _cliPath = FindCliPath();
         _enginePath = FindEnginePath();
         _processRunner = new ProcessRunner();
+        _monitoringService = new MonitoringService(_processRunner, 720);
         _powerModeBackend = new PowerModeBackend(_processRunner, _enginePath);
         _lastOperationStore = new LastOperationStore();
         _startupMutationGate = new StartupMutationGate();
