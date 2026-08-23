@@ -41,7 +41,7 @@ public sealed partial class InsightsWindow : Window
         _isChinese = isChinese;
         _sessionLogProvider = sessionLogProvider;
 
-        DpiAwareWindowSizer.Resize(this, 1080, 720, 900, 620);
+        DpiAwareWindowSizer.Resize(this, 1080, 720, 680, 580);
         var iconPath = Path.Combine(AppContext.BaseDirectory, "app.ico");
         if (File.Exists(iconPath))
             AppWindow.SetIcon(iconPath);
@@ -93,6 +93,9 @@ public sealed partial class InsightsWindow : Window
         PowerLegend.Text = "GPU power";
         TemperatureLegend.Text = "Temperature";
         TrendEmptyText.Text = "No telemetry samples yet";
+        TrendSummaryText.Text = InsightsAccessibilityPresentation.BuildTrendSummary(
+            [],
+            isChinese: false);
         BatteryReportButton.Content = "Generate Windows battery report";
         DiagnosticButton.Content = "Export diagnostics";
     }
@@ -166,6 +169,9 @@ public sealed partial class InsightsWindow : Window
         var samples = _monitoringService.History.Snapshot()
             .TakeLast(MaximumChartSamples)
             .ToArray();
+        TrendSummaryText.Text = InsightsAccessibilityPresentation.BuildTrendSummary(
+            samples,
+            _isChinese);
         var width = TrendCanvas.ActualWidth;
         var height = TrendCanvas.ActualHeight;
         if (width <= 1 || height <= 1)
@@ -215,6 +221,34 @@ public sealed partial class InsightsWindow : Window
     }
 
     private void TrendCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RenderTrend();
+
+    private void Root_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 0)
+            return;
+        ApplyAuxiliaryLayout(
+            ResponsiveLayoutPolicy.ProjectAuxiliaryContent(e.NewSize.Width));
+    }
+
+    private void ApplyAuxiliaryLayout(AuxiliaryLayoutProjection projection)
+    {
+        InsightsOverviewGrid.ColumnDefinitions[0].Width = new GridLength(
+            1,
+            GridUnitType.Star);
+        InsightsOverviewGrid.ColumnDefinitions[1].Width = projection.Stack
+            ? new GridLength(0)
+            : new GridLength(2, GridUnitType.Star);
+        InsightsOverviewGrid.RowDefinitions[0].Height = projection.Stack
+            ? GridLength.Auto
+            : new GridLength(1, GridUnitType.Star);
+        InsightsOverviewGrid.RowDefinitions[1].Height = projection.Stack
+            ? GridLength.Auto
+            : new GridLength(0);
+        Grid.SetRow(InsightsMetricsRegion, projection.FirstRow);
+        Grid.SetColumn(InsightsMetricsRegion, projection.FirstColumn);
+        Grid.SetRow(InsightsTrendRegion, projection.SecondRow);
+        Grid.SetColumn(InsightsTrendRegion, projection.SecondColumn);
+    }
 
     private async Task RefreshHistoryAsync()
     {

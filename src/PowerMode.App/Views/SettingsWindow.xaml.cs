@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -13,8 +14,13 @@ public sealed partial class SettingsWindow : Window
     private readonly MainWindow _owner;
     private readonly bool _zh;
     private readonly SystemIntegrationService _systemIntegration;
-    private PowerModeSettings _settings;
+    private readonly SettingsEditSession _editSession;
+    private readonly SettingsCloseCoordinator _closeCoordinator;
     private bool _loading;
+    private bool _allowClose;
+    private bool _profileDraftDirty;
+
+    private PowerModeSettings _settings => _editSession.WorkingCopy;
 
     private sealed record ConditionOption(RuleConditionType Type, string Label)
     {
@@ -34,18 +40,32 @@ public sealed partial class SettingsWindow : Window
     public SettingsWindow(MainWindow owner, PowerModeSettings settings, bool chinese)
     {
         _owner = owner;
-        _settings = settings;
         _zh = chinese;
         _systemIntegration = new SystemIntegrationService(dataDirectory: SettingsStore.DirectoryPath);
+        var openingSnapshot = SettingsStore.Clone(settings);
+        _editSession = new SettingsEditSession(
+            openingSnapshot,
+            PersistSettingsSnapshotAsync,
+            snapshot => _owner.ApplyFeatureSettings(snapshot));
+        _closeCoordinator = new SettingsCloseCoordinator(
+            _editSession.State,
+            async () => (await SaveAsync()).Succeeded);
 
         InitializeComponent();
         DpiAwareWindowSizer.Resize(this, 760, 680, 680, 580);
         ApplyLanguage();
         InitializeRuleEditor();
         LoadSettings();
+        RegisterEditableControls();
+        ValidateInputs();
         ApplyCapabilityPresentation(settings.ExperienceMode, owner.HardwareCapabilities);
         UpdateVendorInfo();
-        Closed += (_, _) => _systemIntegration.Dispose();
+        AppWindow.Closing += SettingsWindow_Closing;
+        Closed += (_, _) =>
+        {
+            AppWindow.Closing -= SettingsWindow_Closing;
+            _systemIntegration.Dispose();
+        };
     }
 
     internal void ApplyCapabilityPresentation(
@@ -91,67 +111,263 @@ public sealed partial class SettingsWindow : Window
 
     private void ApplyLanguage()
     {
-        if (_zh) return;
-        Title = "PowerMode Feature Center";
-        HeaderText.Text = "Feature Center";
-        SubheaderText.Text = "Custom profiles, automation and safety";
-        ProfilesTab.Header = "Custom profiles";
-        AutomationTab.Header = "Automation & safety";
-        SavedProfileLabel.Text = "Saved profiles";
-        ProfileNameLabel.Text = "Profile name";
-        CpuMaxLabel.Text = "CPU maximum";
-        BrightnessLabel.Text = "Brightness";
-        CpuMinLabel.Text = "CPU minimum state (%)";
-        DisplayOffLabel.Text = "Display off (seconds, 0 = never)";
-        DisableBoostCheck.Content = "Disable CPU boost";
-        ProfileHintText.Text = "Custom profiles use the power saver plan and keep sleep and hibernation disabled.";
-        SaveProfileButton.Content = "Save profile";
-        DeleteProfileButton.Content = "Delete";
-        ApplyProfileButton.Content = "Apply this profile";
-        AutoSwitchToggle.Header = "Automatic mode switching";
-        RealtimeToggle.Header = "Live status monitoring";
-        RestoreExitToggle.Header = "Restore startup plan on exit";
-        AutoHintText.Text = "Remote apps use Remote; heavy apps use High; battery uses Saver; otherwise Balanced.";
-        IntervalLabel.Text = "Monitor interval (seconds, minimum 10)";
-        RemoteProcessesLabel.Text = "Remote process names (comma-separated)";
-        PerformanceProcessesLabel.Text = "Performance process names (comma-separated)";
-        HotkeyHint.Message = "Global shortcuts: Ctrl + Alt + 1/2/3/4";
-        ImportButton.Content = "Import";
-        ExportButton.Content = "Export";
-        CloseButton.Content = "Save and close";
-        BatteryValuesExpander.Header = "Battery-specific values";
-        SeparateBatteryToggle.Header = "Use separate DC values";
-        BatteryCpuLabel.Text = "CPU maximum";
-        BatteryBrightnessLabel.Text = "Brightness";
-        BatteryDisplayLabel.Text = "Display seconds";
-        TemperatureProtectionToggle.Header = "Temperature protection";
-        TemperatureLimitLabel.Text = "Limit temperature (°C)";
-        TemperatureRecoveryLabel.Text = "Recovery temperature (°C)";
-        LowBatteryLabel.Text = "Low battery threshold (%)";
-        RulesTab.Header = "Rules";
-        RuleEditorTitle.Text = "New automation rule";
-        RulesListTitle.Text = "Rule priority (top to bottom)";
-        RuleNameBox.Header = "Name";
-        RuleNameBox.PlaceholderText = "For example: save power on low battery";
-        RuleConditionCombo.Header = "Condition";
-        RuleValueBox.Header = "Condition value";
-        RuleModeCombo.Header = "Target mode";
-        AddRuleButton.Content = "Add rule";
-        ToggleRuleButton.Content = "Enable / disable";
-        DeleteRuleButton.Content = "Delete";
-        SystemTab.Header = "System & maintenance";
-        NotificationsToggle.Header = "Show mode change notifications";
-        PreviewManualSwitchesToggle.Header = "Preview and confirm manual switches";
-        StartWithWindowsToggle.Header = "Start when signing in";
-        StartMinimizedToggle.Header = "Start minimized to tray with Windows";
-        ApplyLastModeToggle.Header = "Apply last mode at startup";
-        HistoryToggle.Header = "Record switch history";
-        UpdateCheckToggle.Header = "Check updates at startup";
-        UpdateUrlBox.Header = "GitHub Releases API URL";
-        BackupCountBox.Header = "Configuration backups to keep";
-        BackupButton.Content = "Back up now";
-        RestoreBackupButton.Content = "Restore latest";
-        CheckUpdateButton.Content = "Check for updates";
+        foreach (var toggle in EditableToggles())
+        {
+            toggle.OnContent = SettingsWindowStrings.On(_zh);
+            toggle.OffContent = SettingsWindowStrings.Off(_zh);
+        }
+        SaveButton.Content = SettingsWindowStrings.Save(_zh);
+        CloseButton.Content = SettingsWindowStrings.Close(_zh);
+
+        if (!_zh)
+        {
+            Title = "PowerMode Feature Center";
+            HeaderText.Text = "Feature Center";
+            SubheaderText.Text = "Custom profiles, automation and safety";
+            ProfilesTab.Header = "Custom profiles";
+            AutomationTab.Header = "Automation & safety";
+            SavedProfileLabel.Text = "Saved profiles";
+            ProfileNameLabel.Text = "Profile name";
+            CpuMaxLabel.Text = "CPU maximum";
+            BrightnessLabel.Text = "Brightness";
+            CpuMinLabel.Text = "CPU minimum state (%)";
+            DisplayOffLabel.Text = "Display off (seconds, 0 = never)";
+            DisableBoostCheck.Content = "Disable CPU boost";
+            ProfileHintText.Text = "Custom profiles use the power saver plan and keep sleep and hibernation disabled.";
+            SaveProfileButton.Content = "Save profile";
+            DeleteProfileButton.Content = "Delete";
+            ApplyProfileButton.Content = "Apply this profile";
+            AutoSwitchToggle.Header = "Automatic mode switching";
+            RealtimeToggle.Header = "Live status monitoring";
+            RestoreExitToggle.Header = "Restore startup plan on exit";
+            AutoHintText.Text = "Remote apps use Remote; heavy apps use High; battery uses Saver; otherwise Balanced.";
+            IntervalLabel.Text = "Monitor interval (seconds, minimum 10)";
+            RemoteProcessesLabel.Text = "Remote process names (comma-separated)";
+            PerformanceProcessesLabel.Text = "Performance process names (comma-separated)";
+            HotkeyHint.Message = "Global shortcuts: Ctrl + Alt + 1/2/3/4";
+            ImportButton.Content = "Import";
+            ExportButton.Content = "Export";
+            BatteryValuesExpander.Header = "Battery-specific values";
+            SeparateBatteryToggle.Header = "Use separate DC values";
+            BatteryCpuLabel.Text = "CPU maximum";
+            BatteryBrightnessLabel.Text = "Brightness";
+            BatteryDisplayLabel.Text = "Display seconds";
+            TemperatureProtectionToggle.Header = "Temperature protection";
+            TemperatureLimitLabel.Text = "Limit temperature (°C)";
+            TemperatureRecoveryLabel.Text = "Recovery temperature (°C)";
+            LowBatteryLabel.Text = "Low battery threshold (%)";
+            RulesTab.Header = "Rules";
+            RuleEditorTitle.Text = "New or edit automation rule";
+            RulesListTitle.Text = "Rule priority (top to bottom)";
+            RuleNameBox.Header = "Name";
+            RuleNameBox.PlaceholderText = "For example: save power on low battery";
+            RuleConditionCombo.Header = "Condition";
+            RuleValueBox.Header = "Condition value";
+            RuleModeCombo.Header = "Target mode";
+            AddRuleButton.Content = "Add rule";
+            EditRuleButton.Content = "Update selected rule";
+            ToggleRuleButton.Content = "Enable / disable";
+            DeleteRuleButton.Content = "Delete";
+            SystemTab.Header = "System & maintenance";
+            NotificationsToggle.Header = "Show mode change notifications";
+            PreviewManualSwitchesToggle.Header = "Preview and confirm manual switches";
+            StartWithWindowsToggle.Header = "Start when signing in";
+            StartMinimizedToggle.Header = "Start minimized to tray with Windows";
+            ApplyLastModeToggle.Header = "Apply last mode at startup";
+            HistoryToggle.Header = "Record switch history";
+            UpdateCheckToggle.Header = "Check updates at startup";
+            UpdateUrlBox.Header = "GitHub Releases API URL";
+            BackupCountBox.Header = "Configuration backups to keep";
+            BackupButton.Content = "Back up now";
+            RestoreBackupButton.Content = "Restore latest";
+            CheckUpdateButton.Content = "Check for updates";
+        }
+
+        ApplyAccessibleInputNames();
+    }
+
+    private IEnumerable<ToggleSwitch> EditableToggles() =>
+    [
+        SeparateBatteryToggle,
+        AutoSwitchToggle,
+        RealtimeToggle,
+        RestoreExitToggle,
+        TemperatureProtectionToggle,
+        NotificationsToggle,
+        PreviewManualSwitchesToggle,
+        StartWithWindowsToggle,
+        StartMinimizedToggle,
+        ApplyLastModeToggle,
+        HistoryToggle,
+        UpdateCheckToggle
+    ];
+
+    private IEnumerable<NumberBox> EditableNumberBoxes() =>
+    [
+        CpuMinBox,
+        DisplayOffBox,
+        BatteryCpuBox,
+        BatteryBrightnessBox,
+        BatteryDisplayBox,
+        TemperatureLimitBox,
+        TemperatureRecoveryBox,
+        LowBatteryBox,
+        IntervalBox,
+        BackupCountBox
+    ];
+
+    private IEnumerable<TextBox> EditableTextBoxes() =>
+    [
+        ProfileNameBox,
+        RemoteProcessesBox,
+        PerformanceProcessesBox,
+        UpdateUrlBox
+    ];
+
+    private void RegisterEditableControls()
+    {
+        foreach (var toggle in EditableToggles())
+            toggle.Toggled += EditableToggle_Toggled;
+        foreach (var numberBox in EditableNumberBoxes())
+            numberBox.ValueChanged += EditableNumberBox_ValueChanged;
+        foreach (var textBox in EditableTextBoxes())
+            textBox.TextChanged += EditableTextBox_TextChanged;
+        DisableBoostCheck.Checked += EditableCheckBox_Changed;
+        DisableBoostCheck.Unchecked += EditableCheckBox_Changed;
+    }
+
+    private void EditableToggle_Toggled(object sender, RoutedEventArgs e) =>
+        MarkInputChanged(sender);
+
+    private void EditableNumberBox_ValueChanged(
+        NumberBox sender,
+        NumberBoxValueChangedEventArgs args) => MarkInputChanged(sender);
+
+    private void EditableTextBox_TextChanged(
+        object sender,
+        TextChangedEventArgs e) => MarkInputChanged(sender);
+
+    private void EditableCheckBox_Changed(object sender, RoutedEventArgs e) =>
+        MarkInputChanged(sender);
+
+    private void MarkInputChanged(object? source)
+    {
+        if (_loading)
+            return;
+        if (IsProfileEditorControl(source))
+            _profileDraftDirty = true;
+        _editSession.State.MarkChanged();
+        ValidateInputs();
+    }
+
+    private bool IsProfileEditorControl(object? source) =>
+        ReferenceEquals(source, ProfileNameBox) ||
+        ReferenceEquals(source, CpuMaxSlider) ||
+        ReferenceEquals(source, CpuMinBox) ||
+        ReferenceEquals(source, BrightnessSlider) ||
+        ReferenceEquals(source, DisplayOffBox) ||
+        ReferenceEquals(source, DisableBoostCheck) ||
+        ReferenceEquals(source, SeparateBatteryToggle) ||
+        ReferenceEquals(source, BatteryCpuBox) ||
+        ReferenceEquals(source, BatteryBrightnessBox) ||
+        ReferenceEquals(source, BatteryDisplayBox);
+
+    private bool ValidateInputs()
+    {
+        var valid = EditableNumberBoxes().All(numberBox =>
+                !double.IsNaN(numberBox.Value) &&
+                !double.IsInfinity(numberBox.Value)) &&
+            CpuMinBox.Value <= CpuMaxSlider.Value &&
+            TemperatureRecoveryBox.Value < TemperatureLimitBox.Value;
+        _editSession.State.SetInputValid(valid);
+        SaveButton.IsEnabled = _editSession.State.CanSave;
+        return valid;
+    }
+
+    private void ApplyAccessibleInputNames()
+    {
+        AutomationProperties.SetName(
+            CpuMaxSlider,
+            _zh ? "CPU 上限" : "CPU maximum");
+        AutomationProperties.SetName(
+            BrightnessSlider,
+            _zh ? "亮度" : "Brightness");
+        AutomationProperties.SetName(
+            CpuMinBox,
+            _zh ? "CPU 最低状态" : "CPU minimum state");
+        AutomationProperties.SetName(
+            DisplayOffBox,
+            _zh ? "自动关屏秒数" : "Display off seconds");
+        AutomationProperties.SetName(
+            BatteryCpuBox,
+            _zh ? "电池 CPU 上限" : "Battery CPU maximum");
+        AutomationProperties.SetName(
+            BatteryBrightnessBox,
+            _zh ? "电池亮度" : "Battery brightness");
+        AutomationProperties.SetName(
+            BatteryDisplayBox,
+            _zh ? "电池关屏秒数" : "Battery display off seconds");
+        AutomationProperties.SetName(
+            TemperatureLimitBox,
+            _zh ? "限制温度" : "Temperature limit");
+        AutomationProperties.SetName(
+            TemperatureRecoveryBox,
+            _zh ? "恢复温度" : "Temperature recovery");
+        AutomationProperties.SetName(
+            LowBatteryBox,
+            _zh ? "低电量阈值" : "Low battery threshold");
+        AutomationProperties.SetName(
+            IntervalBox,
+            _zh ? "监控间隔" : "Monitor interval");
+        AutomationProperties.SetName(
+            BackupCountBox,
+            _zh ? "保留配置备份数量" : "Configuration backups to keep");
+    }
+
+    private void Root_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 0)
+            return;
+        var projection = ResponsiveLayoutPolicy.ProjectAuxiliaryContent(e.NewSize.Width);
+        ApplyAuxiliaryLayout(
+            ProfilesEditorGrid,
+            ProfilesPrimaryEditor,
+            ProfilesSecondaryEditor,
+            projection,
+            firstColumnWidth: null);
+        ApplyAuxiliaryLayout(
+            RulesEditorGrid,
+            RulesPrimaryEditor,
+            RulesSecondaryEditor,
+            projection,
+            firstColumnWidth: 280);
+    }
+
+    private static void ApplyAuxiliaryLayout(
+        Grid grid,
+        FrameworkElement first,
+        FrameworkElement second,
+        AuxiliaryLayoutProjection projection,
+        double? firstColumnWidth)
+    {
+        grid.ColumnDefinitions[0].Width = projection.Stack
+            ? new GridLength(1, GridUnitType.Star)
+            : firstColumnWidth.HasValue
+                ? new GridLength(firstColumnWidth.Value)
+                : new GridLength(1, GridUnitType.Star);
+        grid.ColumnDefinitions[1].Width = projection.Stack
+            ? new GridLength(0)
+            : new GridLength(1, GridUnitType.Star);
+        grid.RowDefinitions[0].Height = projection.Stack
+            ? GridLength.Auto
+            : new GridLength(1, GridUnitType.Star);
+        grid.RowDefinitions[1].Height = projection.Stack
+            ? GridLength.Auto
+            : new GridLength(0);
+        Grid.SetRow(first, projection.FirstRow);
+        Grid.SetColumn(first, projection.FirstColumn);
+        Grid.SetRow(second, projection.SecondRow);
+        Grid.SetColumn(second, projection.SecondColumn);
     }
 
     private void InitializeRuleEditor()
@@ -207,6 +423,8 @@ public sealed partial class SettingsWindow : Window
 
         if (ProfileCombo.SelectedItem is CustomPowerProfile profile) ShowProfile(profile);
         RefreshRulesList();
+        _profileDraftDirty = false;
+        ValidateInputs();
     }
 
     private void ShowProfile(CustomPowerProfile profile)
@@ -249,12 +467,22 @@ public sealed partial class SettingsWindow : Window
 
     private void ProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_loading && ProfileCombo.SelectedItem is CustomPowerProfile profile) ShowProfile(profile);
+        if (_loading)
+            return;
+        if (_profileDraftDirty && ValidateInputs())
+            StageProfileDraft();
+        if (ProfileCombo.SelectedItem is CustomPowerProfile profile)
+            ShowProfile(profile);
+        _profileDraftDirty = false;
     }
 
     private void ProfileSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        if (!_loading) UpdateValues();
+        if (!_loading)
+        {
+            UpdateValues();
+            MarkInputChanged(sender);
+        }
     }
 
     private void UpdateValues()
@@ -264,40 +492,73 @@ public sealed partial class SettingsWindow : Window
         BrightnessValue.Text = $"{(int)BrightnessSlider.Value}%";
     }
 
-    private async void SaveProfileButton_Click(object sender, RoutedEventArgs e)
+    private void SaveProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ValidateInputs())
+        {
+            ShowSaved(SettingsWindowStrings.InvalidInput(_zh), InfoBarSeverity.Warning);
+            return;
+        }
+        StageProfileDraft();
+        LoadSettings();
+        ShowSaved(_zh ? "预设更改等待保存" : "Profile change is ready to save");
+    }
+
+    private void StageProfileDraft()
     {
         var profile = ReadProfile();
-        var existing = _settings.Profiles.FirstOrDefault(x =>
-            x.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase));
-        if (existing is null)
+        _editSession.Mutate(settings =>
         {
-            _settings.Profiles.Add(profile);
-        }
-        else
-        {
-            existing.CpuMax = profile.CpuMax;
-            existing.CpuMin = profile.CpuMin;
-            existing.Brightness = profile.Brightness;
-            existing.DisplayOffSeconds = profile.DisplayOffSeconds;
-            existing.DisableBoost = profile.DisableBoost;
-            existing.UseSeparateBatteryValues = profile.UseSeparateBatteryValues;
-            existing.BatteryCpuMax = profile.BatteryCpuMax;
-            existing.BatteryBrightness = profile.BatteryBrightness;
-            existing.BatteryDisplayOffSeconds = profile.BatteryDisplayOffSeconds;
-        }
+            var existing = settings.Profiles.FirstOrDefault(x =>
+                x.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                settings.Profiles.Add(profile);
+                return;
+            }
 
-        await PersistSettingsAsync("profile-save");
-        LoadSettings();
-        ShowSaved(_zh ? "预设已保存" : "Profile saved");
+            CopyProfile(profile, existing);
+        });
+        _profileDraftDirty = false;
     }
 
     private async void DeleteProfileButton_Click(object sender, RoutedEventArgs e)
     {
         if (ProfileCombo.SelectedItem is not CustomPowerProfile profile) return;
-        _settings.Profiles.Remove(profile);
-        await PersistSettingsAsync("profile-delete");
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = SettingsWindowStrings.DeleteProfileTitle(_zh),
+            Content = SettingsWindowStrings.DeleteNamedItem(_zh, profile.Name),
+            PrimaryButtonText = SettingsWindowStrings.Delete(_zh),
+            CloseButtonText = SettingsWindowStrings.Cancel(_zh),
+            DefaultButton = ContentDialogButton.Close
+        };
+        var confirmed = await dialog.ShowAsync() == ContentDialogResult.Primary;
+        if (!_editSession.MutateWhenConfirmed(
+                confirmed,
+                settings => settings.Profiles.RemoveAll(candidate =>
+                    ReferenceEquals(candidate, profile) ||
+                    candidate.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))))
+            return;
         LoadSettings();
-        ShowSaved(_zh ? "预设已删除" : "Profile deleted");
+        ShowSaved(_zh ? "预设删除等待保存" : "Profile deletion is ready to save");
+    }
+
+    private static void CopyProfile(
+        CustomPowerProfile source,
+        CustomPowerProfile destination)
+    {
+        destination.Name = source.Name;
+        destination.CpuMax = source.CpuMax;
+        destination.CpuMin = source.CpuMin;
+        destination.Brightness = source.Brightness;
+        destination.DisplayOffSeconds = source.DisplayOffSeconds;
+        destination.DisableBoost = source.DisableBoost;
+        destination.UseSeparateBatteryValues = source.UseSeparateBatteryValues;
+        destination.BatteryCpuMax = source.BatteryCpuMax;
+        destination.BatteryBrightness = source.BatteryBrightness;
+        destination.BatteryDisplayOffSeconds = source.BatteryDisplayOffSeconds;
     }
 
     private async void ApplyProfileButton_Click(object sender, RoutedEventArgs e)
@@ -338,12 +599,42 @@ public sealed partial class SettingsWindow : Window
         _settings.ConfigurationBackupCount = Math.Clamp((int)BackupCountBox.Value, 1, 50);
     }
 
-    private async Task PersistSettingsAsync(string backupReason, bool createVersionBackup = true)
+    private Task PersistSettingsSnapshotAsync(
+        PowerModeSettings snapshot,
+        CancellationToken cancellationToken)
     {
-        if (!_owner.TrySaveSettings(_settings))
-            return;
-        _owner.ApplyFeatureSettings(_settings);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_owner.TrySaveSettings(snapshot))
+            throw new IOException(SettingsWindowStrings.SaveFailed(_zh));
+        return Task.CompletedTask;
+    }
 
+    private async Task<SettingsSaveResult> SaveAsync(
+        string backupReason = "settings-save",
+        bool createVersionBackup = true)
+    {
+        if (!_editSession.State.IsDirty)
+            return SettingsSaveResult.Success;
+        if (!ValidateInputs())
+        {
+            var validation = SettingsWindowStrings.InvalidInput(_zh);
+            ShowSaved(validation, InfoBarSeverity.Warning);
+            return new(false, validation);
+        }
+
+        if (_profileDraftDirty)
+            StageProfileDraft();
+        CaptureSettingsFromUi();
+        var result = await _editSession.SaveAsync();
+        if (!result.Succeeded)
+        {
+            ShowSaved(
+                result.Error ?? SettingsWindowStrings.SaveFailed(_zh),
+                InfoBarSeverity.Error);
+            return result;
+        }
+
+        LoadSettings();
         if (createVersionBackup)
         {
             try
@@ -356,22 +647,8 @@ public sealed partial class SettingsWindow : Window
                 // Saving the live settings is more important than an optional historical copy.
             }
         }
-    }
-
-    private void ApplyStartupRegistration()
-    {
-        if (!_owner.CanPersistSettings)
-            return;
-        _systemIntegration.ConfigureStartup(_settings.StartWithWindows, _settings.StartMinimized);
-    }
-
-    private async Task SaveAutomationAsync()
-    {
-        if (!_owner.CanPersistSettings)
-            return;
-        CaptureSettingsFromUi();
-        ApplyStartupRegistration();
-        await PersistSettingsAsync("settings-save");
+        ShowSaved(_zh ? "设置已保存" : "Settings saved");
+        return result;
     }
 
     private async void ImportButton_Click(object sender, RoutedEventArgs e)
@@ -384,11 +661,10 @@ public sealed partial class SettingsWindow : Window
 
         try
         {
-            _settings = SettingsStore.Import(file.Path);
-            ApplyStartupRegistration();
-            await PersistSettingsAsync("import");
+            var imported = SettingsStore.Import(file.Path);
+            _editSession.ReplaceWorkingCopy(imported, markDirty: true);
             LoadSettings();
-            ShowSaved(_zh ? "配置已导入" : "Settings imported");
+            ShowSaved(_zh ? "配置已导入，等待保存" : "Settings imported and ready to save");
         }
         catch (Exception ex)
         {
@@ -400,13 +676,20 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            await SaveAutomationAsync();
+            if (!ValidateInputs())
+            {
+                ShowSaved(SettingsWindowStrings.InvalidInput(_zh), InfoBarSeverity.Warning);
+                return;
+            }
+            if (_profileDraftDirty)
+                StageProfileDraft();
+            CaptureSettingsFromUi();
             var picker = new FileSavePicker { SuggestedFileName = "PowerMode-settings" };
             picker.FileTypeChoices.Add("JSON", new List<string> { ".json" });
             InitializePicker(picker);
             var file = await picker.PickSaveFileAsync();
             if (file is null) return;
-            SettingsStore.Export(_settings, file.Path);
+            SettingsStore.Export(_editSession.CreateExportSnapshot(), file.Path);
             ShowSaved(_zh ? "配置已导出" : "Settings exported");
         }
         catch (Exception ex)
@@ -415,19 +698,71 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private async void CloseButton_Click(object sender, RoutedEventArgs e)
+    private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         Root.IsHitTestVisible = false;
         try
         {
-            await SaveAutomationAsync();
-            Close();
+            await SaveAsync();
         }
         catch (Exception ex)
         {
-            Root.IsHitTestVisible = true;
             ShowSaved(ex.Message, InfoBarSeverity.Error);
         }
+        finally
+        {
+            Root.IsHitTestVisible = true;
+        }
+    }
+
+    private async void CloseButton_Click(object sender, RoutedEventArgs e) =>
+        await RequestCloseAsync();
+
+    private void SettingsWindow_Closing(
+        Microsoft.UI.Windowing.AppWindow sender,
+        Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
+    {
+        if (_allowClose)
+            return;
+        args.Cancel = true;
+        _ = RequestCloseAsync();
+    }
+
+    internal async Task<bool> RequestCloseAsync()
+    {
+        if (_allowClose)
+            return true;
+
+        var shouldClose = await _closeCoordinator.RequestCloseAsync(ChooseCloseAsync);
+        if (!shouldClose)
+            return false;
+
+        _allowClose = true;
+        Close();
+        return true;
+    }
+
+    private async Task<SettingsCloseChoice> ChooseCloseAsync(bool canSave)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = SettingsWindowStrings.UnsavedTitle(_zh),
+            Content = SettingsWindowStrings.UnsavedMessage(_zh),
+            PrimaryButtonText = SettingsWindowStrings.Save(_zh),
+            SecondaryButtonText = SettingsWindowStrings.Discard(_zh),
+            CloseButtonText = SettingsWindowStrings.ContinueEditing(_zh),
+            IsPrimaryButtonEnabled = canSave,
+            DefaultButton = canSave
+                ? ContentDialogButton.Primary
+                : ContentDialogButton.Close
+        };
+        return await dialog.ShowAsync() switch
+        {
+            ContentDialogResult.Primary => SettingsCloseChoice.Save,
+            ContentDialogResult.Secondary => SettingsCloseChoice.Discard,
+            _ => SettingsCloseChoice.ContinueEditing
+        };
     }
 
     private void SeparateBatteryToggle_Toggled(object sender, RoutedEventArgs e)
@@ -582,7 +917,7 @@ public sealed partial class SettingsWindow : Window
         throw new FormatException("Boolean value must be true or false.");
     }
 
-    private async void AddRuleButton_Click(object sender, RoutedEventArgs e)
+    private void AddRuleButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -593,7 +928,7 @@ public sealed partial class SettingsWindow : Window
                 ? option.Label
                 : (_zh ? "自动规则" : "Automation rule");
             var nextPriority = _settings.Rules.Count == 0 ? 100 : _settings.Rules.Max(x => x.Priority) + 10;
-            _settings.Rules.Add(new AutomationRule
+            var rule = new AutomationRule
             {
                 Name = string.IsNullOrWhiteSpace(RuleNameBox.Text) ? fallbackName : RuleNameBox.Text.Trim(),
                 Description = string.IsNullOrWhiteSpace(RuleNameBox.Text) ? fallbackName : RuleNameBox.Text.Trim(),
@@ -602,12 +937,12 @@ public sealed partial class SettingsWindow : Window
                 TargetMode = mode.Value,
                 MatchMode = RuleMatchMode.All,
                 Conditions = new List<RuleCondition> { condition }
-            });
-            await PersistSettingsAsync("rule-add");
+            };
+            _editSession.Mutate(settings => settings.Rules.Add(rule));
             RuleNameBox.Text = string.Empty;
             RuleValueBox.Text = string.Empty;
             RefreshRulesList();
-            ShowSaved(_zh ? "自动规则已添加" : "Automation rule added");
+            ShowSaved(_zh ? "自动规则等待保存" : "Automation rule is ready to save");
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException)
         {
@@ -615,7 +950,44 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private async void ToggleRuleButton_Click(object sender, RoutedEventArgs e)
+    private void EditRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = GetSelectedRule();
+        if (selected is null)
+        {
+            ShowSaved(
+                _zh ? "请先选择一条规则。" : "Select a rule first.",
+                InfoBarSeverity.Warning);
+            return;
+        }
+
+        try
+        {
+            if (RuleModeCombo.SelectedItem is not ModeOption mode)
+                throw new FormatException(_zh ? "请选择目标模式。" : "Choose a target mode.");
+            var condition = BuildCondition();
+            var fallbackName = RuleConditionCombo.SelectedItem is ConditionOption option
+                ? option.Label
+                : (_zh ? "自动规则" : "Automation rule");
+            _editSession.Mutate(_ =>
+            {
+                selected.Name = string.IsNullOrWhiteSpace(RuleNameBox.Text)
+                    ? fallbackName
+                    : RuleNameBox.Text.Trim();
+                selected.Description = selected.Name;
+                selected.TargetMode = mode.Value;
+                selected.Conditions = [condition];
+            });
+            RefreshRulesList(selected.Id);
+            ShowSaved(_zh ? "规则更改等待保存" : "Rule changes are ready to save");
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+        {
+            ShowSaved(ex.Message, InfoBarSeverity.Warning);
+        }
+    }
+
+    private void ToggleRuleButton_Click(object sender, RoutedEventArgs e)
     {
         var rule = GetSelectedRule();
         if (rule is null)
@@ -623,10 +995,11 @@ public sealed partial class SettingsWindow : Window
             ShowSaved(_zh ? "请先选择一条规则。" : "Select a rule first.", InfoBarSeverity.Warning);
             return;
         }
-        rule.IsEnabled = !rule.IsEnabled;
-        await PersistSettingsAsync("rule-toggle");
+        _editSession.Mutate(_ => rule.IsEnabled = !rule.IsEnabled);
         RefreshRulesList(rule.Id);
-        ShowSaved(rule.IsEnabled ? (_zh ? "规则已启用" : "Rule enabled") : (_zh ? "规则已停用" : "Rule disabled"));
+        ShowSaved(rule.IsEnabled
+            ? (_zh ? "规则启用更改等待保存" : "Rule enablement is ready to save")
+            : (_zh ? "规则停用更改等待保存" : "Rule disablement is ready to save"));
     }
 
     private async void DeleteRuleButton_Click(object sender, RoutedEventArgs e)
@@ -637,10 +1010,22 @@ public sealed partial class SettingsWindow : Window
             ShowSaved(_zh ? "请先选择一条规则。" : "Select a rule first.", InfoBarSeverity.Warning);
             return;
         }
-        _settings.Rules.Remove(rule);
-        await PersistSettingsAsync("rule-delete");
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = SettingsWindowStrings.DeleteRuleTitle(_zh),
+            Content = SettingsWindowStrings.DeleteNamedItem(_zh, rule.Name),
+            PrimaryButtonText = SettingsWindowStrings.Delete(_zh),
+            CloseButtonText = SettingsWindowStrings.Cancel(_zh),
+            DefaultButton = ContentDialogButton.Close
+        };
+        var confirmed = await dialog.ShowAsync() == ContentDialogResult.Primary;
+        if (!_editSession.MutateWhenConfirmed(
+                confirmed,
+                settings => settings.Rules.RemoveAll(candidate => candidate.Id == rule.Id)))
+            return;
         RefreshRulesList();
-        ShowSaved(_zh ? "规则已删除" : "Rule deleted");
+        ShowSaved(_zh ? "规则删除等待保存" : "Rule deletion is ready to save");
     }
 
     private AutomationRule? GetSelectedRule()
@@ -648,6 +1033,40 @@ public sealed partial class SettingsWindow : Window
         return RulesList.SelectedItem is RuleListItem item
             ? _settings.Rules.FirstOrDefault(x => x.Id == item.Id)
             : null;
+    }
+
+    private void RulesList_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (_loading || GetSelectedRule() is not { } rule)
+            return;
+
+        _loading = true;
+        try
+        {
+            RuleNameBox.Text = rule.Name;
+            RuleModeCombo.SelectedItem = RuleModeCombo.Items
+                .OfType<ModeOption>()
+                .FirstOrDefault(option => string.Equals(
+                    option.Value,
+                    rule.TargetMode,
+                    StringComparison.OrdinalIgnoreCase));
+            if (rule.Conditions.FirstOrDefault() is { } condition)
+            {
+                RuleConditionCombo.SelectedItem = RuleConditionCombo.Items
+                    .OfType<ConditionOption>()
+                    .FirstOrDefault(option => option.Type == condition.Type);
+                RuleValueBox.Text = condition.SecondaryValue is null
+                    ? condition.Value
+                    : $"{condition.Value}-{condition.SecondaryValue}";
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+        UpdateRuleHelp();
     }
 
     private void RefreshRulesList(Guid? selectId = null)
@@ -700,9 +1119,9 @@ public sealed partial class SettingsWindow : Window
         BackupButton.IsEnabled = false;
         try
         {
-            CaptureSettingsFromUi();
-            ApplyStartupRegistration();
-            await PersistSettingsAsync("manual-save", createVersionBackup: false);
+            var save = await SaveAsync("manual-save", createVersionBackup: false);
+            if (!save.Succeeded)
+                return;
             var backup = await _systemIntegration.CreateConfigurationBackupAsync(SettingsStore.FilePath,
                 "manual", _settings.ConfigurationBackupCount);
             ShowSaved(_zh
@@ -749,8 +1168,9 @@ public sealed partial class SettingsWindow : Window
                 SettingsStore.FilePath, createSafetyBackup: true);
             if (!result.Succeeded)
                 throw new InvalidOperationException(result.Error ?? (_zh ? "配置恢复失败。" : "Configuration restore failed."));
-            _settings = SettingsStore.LoadStrict();
-            await _owner.AcceptRecoveredSettingsAsync(_settings);
+            var restored = SettingsStore.LoadStrict();
+            await _owner.AcceptRecoveredSettingsAsync(restored);
+            _editSession.ReplaceWorkingCopy(restored, markDirty: false);
             LoadSettings();
             ShowSaved(_zh ? "配置已恢复并立即生效。" : "Configuration restored and applied.");
         }

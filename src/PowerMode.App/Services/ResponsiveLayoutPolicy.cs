@@ -98,6 +98,15 @@ internal sealed record ResponsiveDashboardProjection(
     bool StackRecommendationContent,
     bool ShowToolbarOverflow);
 
+internal sealed record AuxiliaryLayoutProjection(
+    bool Stack,
+    int FirstRow,
+    int FirstColumn,
+    int SecondRow,
+    int SecondColumn,
+    IReadOnlyList<GridLengthProjection> Columns,
+    IReadOnlyList<GridLengthProjection> Rows);
+
 internal static class ResponsiveLayoutPolicy
 {
     public const double DefaultWidth = 1120;
@@ -167,6 +176,25 @@ internal static class ResponsiveLayoutPolicy
 
     public static bool ShouldStackAuxiliaryContent(double logicalWidth) =>
         logicalWidth < MediumMinimumWidth;
+
+    public static AuxiliaryLayoutProjection ProjectAuxiliaryContent(
+        double logicalWidth)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(logicalWidth, 0);
+        var stack = ShouldStackAuxiliaryContent(logicalWidth);
+        return new(
+            stack,
+            0,
+            0,
+            stack ? 1 : 0,
+            stack ? 0 : 1,
+            stack
+                ? [GridLengthProjection.Star, GridLengthProjection.Fixed(0)]
+                : [GridLengthProjection.Star, GridLengthProjection.Star],
+            stack
+                ? [GridLengthProjection.Auto, GridLengthProjection.Auto]
+                : [GridLengthProjection.Star, GridLengthProjection.Fixed(0)]);
+    }
 
     public static ResponsiveDashboardProjection Project(
         double logicalWidth,

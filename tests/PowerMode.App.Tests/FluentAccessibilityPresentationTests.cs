@@ -257,6 +257,31 @@ public sealed class FluentAccessibilityPresentationTests
         Assert.Contains("XamlControlsResources", xaml);
     }
 
+    [Fact]
+    public void SettingsAndInsights_ExposeResponsiveRegionsLiveSummaryAndThemeColors()
+    {
+        var settings = XDocument.Load(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "SettingsWindow.xaml"));
+        var insights = XDocument.Load(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "InsightsWindow.xaml"));
+
+        _ = NamedElement(settings, "ProfilesEditorGrid");
+        _ = NamedElement(settings, "RulesEditorGrid");
+        _ = NamedElement(insights, "InsightsOverviewGrid");
+        _ = NamedElement(insights, "InsightsMetricsRegion");
+        _ = NamedElement(insights, "InsightsTrendRegion");
+
+        var summary = NamedElement(insights, "TrendSummaryText");
+        Assert.Equal("Polite", AutomationAttribute(summary, "LiveSetting"));
+        Assert.Equal("Wrap", AttributeValue(summary, "TextWrapping"));
+
+        Assert.DoesNotMatch(new Regex("""#[0-9A-Fa-f]{3,8}"""), settings.ToString());
+        Assert.DoesNotMatch(new Regex("""#[0-9A-Fa-f]{3,8}"""), insights.ToString());
+        Assert.Contains(
+            insights.Descendants(),
+            element => UsesThemeResource(element, "SystemFillColorCautionBrush"));
+    }
+
     private static void AssertNamedAccelerator(XDocument document, string name, string key)
     {
         var element = NamedElement(document, name);

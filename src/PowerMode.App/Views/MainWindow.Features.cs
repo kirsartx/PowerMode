@@ -26,6 +26,7 @@ public sealed partial class MainWindow
     private bool _globalHotkeysAvailable;
     private bool _closingAfterRestore;
     private bool _exitRestoreInProgress;
+    private bool _settingsCloseInProgress;
     private HardwareCapabilities _hardwareCapabilities=HardwareCapabilities.Unknown;
     private HardwareCapabilityService? _hardwareCapabilityService;
     private readonly CapabilityPresentationLifetime _capabilityPresentationLifetime=new();
@@ -199,6 +200,40 @@ public sealed partial class MainWindow
     }
     private async void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender,Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
+        if (_settingsWindow is { } settingsWindow)
+        {
+            args.Cancel = true;
+            if (_settingsCloseInProgress)
+                return;
+
+            _settingsCloseInProgress = true;
+            bool canClose;
+            try
+            {
+                canClose = await settingsWindow.RequestCloseAsync();
+            }
+            catch (Exception exception)
+            {
+                AppendLog($"Settings close: {exception.Message}");
+                StatusBar.Severity = InfoBarSeverity.Error;
+                StatusText.Text = IsChinese
+                    ? "设置窗口未能安全关闭。"
+                    : "The Settings window could not be closed safely.";
+                return;
+            }
+            finally
+            {
+                _settingsCloseInProgress = false;
+            }
+            if (!canClose)
+                return;
+
+            if (ReferenceEquals(_settingsWindow, settingsWindow))
+                _settingsWindow = null;
+            Close();
+            return;
+        }
+
         if (!_closingAfterRestore &&
             _featureSettings.RestorePlanOnExit &&
             _startupPowerState is { } startupState)
@@ -250,7 +285,7 @@ public sealed partial class MainWindow
     }
     private void CleanupNativeFeatures()
     {
-        _featureTimer?.Stop();try{_settingsWindow?.Close();}catch{} _settingsWindow=null;for(var id=1;id<=4;id++)Native.UnregisterHotKey(_hwnd,id);if(_trayAdded){var data=CreateTrayData();Native.Shell_NotifyIcon(2,ref data);_trayAdded=false;}if(_subclassProc is not null)Native.RemoveWindowSubclass(_hwnd,_subclassProc,1);DisposeAdvancedFeatures();
+        _featureTimer?.Stop();_settingsWindow=null;for(var id=1;id<=4;id++)Native.UnregisterHotKey(_hwnd,id);if(_trayAdded){var data=CreateTrayData();Native.Shell_NotifyIcon(2,ref data);_trayAdded=false;}if(_subclassProc is not null)Native.RemoveWindowSubclass(_hwnd,_subclassProc,1);DisposeAdvancedFeatures();
     }
     private IntPtr WindowSubclassProc(IntPtr hwnd,uint msg,IntPtr wParam,IntPtr lParam,UIntPtr id,UIntPtr data)
     {
@@ -353,7 +388,28 @@ public sealed partial class MainWindow
         AppendProcessDiagnostics("wifi-enable", result);
         StatusText.Text=result.Succeeded?(IsChinese?"WiFi 已恢复":"WiFi restored"):(IsChinese?"WiFi 恢复失败":"WiFi restore failed");StatusBar.Severity=result.Succeeded?InfoBarSeverity.Success:InfoBarSeverity.Error;
     }
-    private void FeaturesButton_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();OpenRecoveryCenterButton_Click(sender,e);return;}if(_settingsWindow is not null){_settingsWindow.Activate();return;}_settingsWindow=new SettingsWindow(this,_featureSettings,IsChinese);_settingsWindow.Closed+=(_,_)=>_settingsWindow=null;_settingsWindow.Activate();}
+    private void FeaturesButton_Click(object sender,RoutedEventArgs e)
+    {
+        if(!CanPersistSettings)
+        {
+            ShowCorruptSettingsWarning();
+            OpenRecoveryCenterButton_Click(sender,e);
+            return;
+        }
+        if(_settingsWindow is not null)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+        var window=new SettingsWindow(this,_featureSettings,IsChinese);
+        _settingsWindow=window;
+        window.Closed+=(_,_)=>
+        {
+            if(ReferenceEquals(_settingsWindow,window))
+                _settingsWindow=null;
+        };
+        window.Activate();
+    }
     private void AutoQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.AutoSwitchEnabled=AutoQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"自动切换已{(_featureSettings.AutoSwitchEnabled?"开启":"关闭")}"):($"Automatic switching {(_featureSettings.AutoSwitchEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
     private void LiveQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.RealTimeMonitoringEnabled=LiveQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"实时监控已{(_featureSettings.RealTimeMonitoringEnabled?"开启":"关闭")}"):($"Live monitoring {(_featureSettings.RealTimeMonitoringEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
     private void OverflowAutoQuickToggle_Click(object sender,RoutedEventArgs e)
