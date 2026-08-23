@@ -567,6 +567,7 @@ public sealed partial class MainWindow
         }
 
         _modeSwitchInProgress = true;
+        UpdateActiveMode(_activeModeKey);
         RenderRecommendation();
         BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
         StatusText.Text = IsChinese
@@ -646,6 +647,7 @@ public sealed partial class MainWindow
         {
             _pendingMode = null;
             _modeSwitchInProgress = false;
+            UpdateActiveMode(_activeModeKey);
             BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             RenderRecommendation();
         }
@@ -746,7 +748,7 @@ public sealed partial class MainWindow
             IsChinese);
         var applyState = RecommendationUiLogic.CreateApplyButtonState(
             recommendation,
-            _featureSettings.LastMode,
+            _activeModeKey,
             _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
             IsChinese);
         RecommendationTitle.Text = presentation.Title;
@@ -768,7 +770,7 @@ public sealed partial class MainWindow
 
         var state = RecommendationUiLogic.CreateApplyButtonState(
             recommendation,
-            _featureSettings.LastMode,
+            _activeModeKey,
             _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
             IsChinese);
         if (!state.IsEnabled)

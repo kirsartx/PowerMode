@@ -38,7 +38,7 @@ public sealed partial class MainWindow : Window
     {
         ["zh"] = new()
         {
-            ["Subtitle"]="Hermes 远程电源切换器", ["Refresh"]="刷新", ["Language"]="English", ["Features"]="功能中心", ["Insights"]="洞察", ["RecoveryCenter"]="恢复", ["ExperienceModeAutomation"]="切换简单或专业模式",
+            ["Subtitle"]="Hermes 远程电源切换器", ["Refresh"]="刷新", ["Language"]="English", ["Features"]="功能中心", ["Insights"]="洞察", ["RecoveryCenter"]="恢复", ["More"]="更多", ["ExperienceModeAutomation"]="切换简单或专业模式",
             ["LastUpdated"]="更新于 {0}", ["Auto"]="自动", ["Live"]="监控",
             ["Mode"]="当前模式", ["Gpu"]="独显功耗", ["Power"]="供电", ["Cpu"]="CPU 上限", ["Brightness"]="亮度", ["Sleep"]="关屏 / 睡眠",
             ["Modes"]="模式", ["ModesHint"]="选择预设方案，核心电源方案会立即切换。", ["Remote"]="远程推荐", ["Saver"]="低功耗", ["Balanced"]="平衡", ["High"]="高性能",
@@ -52,7 +52,7 @@ public sealed partial class MainWindow : Window
         },
         ["en"] = new()
         {
-            ["Subtitle"]="Hermes remote power switcher", ["Refresh"]="Refresh", ["Language"]="中文", ["Features"]="Features", ["Insights"]="Insights", ["RecoveryCenter"]="Recovery", ["ExperienceModeAutomation"]="Switch between Simple and Professional modes",
+            ["Subtitle"]="Hermes remote power switcher", ["Refresh"]="Refresh", ["Language"]="中文", ["Features"]="Features", ["Insights"]="Insights", ["RecoveryCenter"]="Recovery", ["More"]="More", ["ExperienceModeAutomation"]="Switch between Simple and Professional modes",
             ["LastUpdated"]="Updated {0}", ["Auto"]="Auto", ["Live"]="Live",
             ["Mode"]="Current mode", ["Gpu"]="dGPU power", ["Power"]="Power", ["Cpu"]="CPU max", ["Brightness"]="Brightness", ["Sleep"]="Display / sleep",
             ["Modes"]="Modes", ["ModesHint"]="Choose a preset. The core Windows plan switches immediately.", ["Remote"]="Remote", ["Saver"]="Saver", ["Balanced"]="Balanced", ["High"]="High",
@@ -150,22 +150,188 @@ public sealed partial class MainWindow : Window
 
     private void ConfigureWindow()
     {
-        if(!DpiAwareWindowSizer.TryRestore(this,960,650))
-            DpiAwareWindowSizer.Resize(this,1120,760,960,650,center:true);
+        if(!DpiAwareWindowSizer.TryRestore(this,720,560))
+            DpiAwareWindowSizer.Resize(this,1120,760,720,560,center:true);
     }
 
     private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var layout=ResponsiveLayoutPolicy.Evaluate(e.NewSize.Width,_featureSettings.ExperienceMode);
+        ApplyResponsiveLayout(e.NewSize.Width);
+    }
+
+    private void ApplyResponsiveLayout(double logicalWidth)
+    {
+        if (!double.IsFinite(logicalWidth) || logicalWidth <= 0)
+            logicalWidth = 1120;
+
+        var layout=ResponsiveLayoutPolicy.Evaluate(
+            logicalWidth,
+            _featureSettings.ExperienceMode);
         RootGrid.Padding=layout.Tier switch
         {
             LayoutTier.Narrow=>new Thickness(16,14,16,14),
             LayoutTier.Medium=>new Thickness(20,18,20,18),
             _=>new Thickness(28,22,28,22)
         };
-        var visibility=layout.Tier==LayoutTier.Narrow?Visibility.Collapsed:Visibility.Visible;
-        AutoQuickText.Visibility=visibility;LiveQuickText.Visibility=visibility;RefreshButtonText.Visibility=visibility;
-        FeaturesButtonText.Visibility=visibility;InsightsButtonText.Visibility=visibility;RecoveryCenterButtonText.Visibility=visibility;
+
+        ApplyToolbarDisplay(
+            ExperienceModeButton,
+            ExperienceModeText,
+            layout.Toolbar[ToolbarAction.Experience]);
+        ApplyToolbarDisplay(
+            AutoQuickToggle,
+            AutoQuickText,
+            layout.Toolbar[ToolbarAction.Auto]);
+        ApplyToolbarDisplay(
+            LiveQuickToggle,
+            LiveQuickText,
+            layout.Toolbar[ToolbarAction.Live]);
+        ApplyToolbarDisplay(
+            RefreshButton,
+            RefreshButtonText,
+            layout.Toolbar[ToolbarAction.Refresh]);
+        ApplyToolbarDisplay(
+            FeaturesButton,
+            FeaturesButtonText,
+            layout.Toolbar[ToolbarAction.Features]);
+        ApplyToolbarDisplay(
+            InsightsButton,
+            InsightsButtonText,
+            layout.Toolbar[ToolbarAction.Insights]);
+        ApplyToolbarDisplay(
+            RecoveryCenterButton,
+            RecoveryCenterButtonText,
+            layout.Toolbar[ToolbarAction.Recovery]);
+        ApplyToolbarDisplay(
+            LanguageButton,
+            LanguageButtonText,
+            layout.Toolbar[ToolbarAction.Language]);
+        MoreButton.Visibility = layout.Toolbar.Values.Any(
+            display => display == ToolbarDisplay.Overflow)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        ReflowVisibleStatusCards(layout.StatusCardColumns);
+        ApplyMainContentLayout(layout);
+        ApplyRecommendationLayout(logicalWidth);
+    }
+
+    private static void ApplyToolbarDisplay(
+        UIElement control,
+        UIElement label,
+        ToolbarDisplay display)
+    {
+        control.Visibility = display is ToolbarDisplay.Hidden or ToolbarDisplay.Overflow
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        label.Visibility = display == ToolbarDisplay.Full
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void ReflowVisibleStatusCards(int columnCount)
+    {
+        var cards = new (StatusCardId Card, FrameworkElement Element)[]
+        {
+            (StatusCardId.Mode, ModeStatusCard),
+            (StatusCardId.Gpu, GpuStatusCard),
+            (StatusCardId.Power, PowerStatusCard),
+            (StatusCardId.Cpu, CpuStatusCard),
+            (StatusCardId.Brightness, BrightnessStatusCard),
+            (StatusCardId.Sleep, SleepStatusCard)
+        };
+        var visibleCards = cards
+            .Where(item => item.Element.Visibility == Visibility.Visible)
+            .Select(item => item.Card)
+            .ToArray();
+        var placements = ResponsiveLayoutPolicy.ReflowStatusCards(
+            visibleCards,
+            columnCount);
+
+        StatusCardsGrid.ColumnDefinitions.Clear();
+        for (var column = 0; column < columnCount; column++)
+        {
+            StatusCardsGrid.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(1, GridUnitType.Star)
+            });
+        }
+        StatusCardsGrid.RowDefinitions.Clear();
+        var rowCount = Math.Max(1, (visibleCards.Length + columnCount - 1) / columnCount);
+        for (var row = 0; row < rowCount; row++)
+            StatusCardsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        foreach (var placement in placements)
+        {
+            var element = cards.Single(item => item.Card == placement.Card).Element;
+            Grid.SetRow(element, placement.Row);
+            Grid.SetColumn(element, placement.Column);
+        }
+    }
+
+    private void ApplyMainContentLayout(ResponsiveLayoutState layout)
+    {
+        var professional = _featureSettings.ExperienceMode == ExperienceMode.Professional;
+        ProfessionalLogPanel.Visibility = professional
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ProfessionalLogPanel.MinHeight = layout.ProfessionalLogMinimumHeight;
+
+        Grid.SetColumn(ModePanel, 0);
+        Grid.SetRow(ModePanel, 0);
+        if (layout.ModePanelUsesContentHeight)
+        {
+            MainContentGrid.ColumnSpacing = 0;
+            MainContentGrid.RowSpacing = 0;
+            MainContentGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+            MainContentGrid.ColumnDefinitions[1].Width = new GridLength(0);
+            MainContentGrid.RowDefinitions[0].Height = GridLength.Auto;
+            MainContentGrid.RowDefinitions[1].Height = new GridLength(0);
+            MainContentGrid.VerticalAlignment = VerticalAlignment.Top;
+            ModePanel.VerticalAlignment = VerticalAlignment.Top;
+            return;
+        }
+
+        MainContentGrid.VerticalAlignment = VerticalAlignment.Stretch;
+        ModePanel.VerticalAlignment = VerticalAlignment.Stretch;
+        if (layout.StackMainContent)
+        {
+            MainContentGrid.ColumnSpacing = 0;
+            MainContentGrid.RowSpacing = 16;
+            MainContentGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+            MainContentGrid.ColumnDefinitions[1].Width = new GridLength(0);
+            MainContentGrid.RowDefinitions[0].Height = GridLength.Auto;
+            MainContentGrid.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
+            Grid.SetColumn(ProfessionalLogPanel, 0);
+            Grid.SetRow(ProfessionalLogPanel, 1);
+            return;
+        }
+
+        MainContentGrid.ColumnSpacing = 16;
+        MainContentGrid.RowSpacing = 0;
+        MainContentGrid.ColumnDefinitions[0].Width = new GridLength(390);
+        MainContentGrid.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
+        MainContentGrid.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star);
+        MainContentGrid.RowDefinitions[1].Height = new GridLength(0);
+        Grid.SetColumn(ProfessionalLogPanel, 1);
+        Grid.SetRow(ProfessionalLogPanel, 0);
+    }
+
+    private void ApplyRecommendationLayout(double logicalWidth)
+    {
+        var stack = ResponsiveLayoutPolicy.ShouldStackAuxiliaryContent(logicalWidth);
+        RecommendationLayoutGrid.RowDefinitions[1].Height = stack
+            ? GridLength.Auto
+            : new GridLength(0);
+        Grid.SetRow(ApplyRecommendationButton, stack ? 1 : 0);
+        Grid.SetColumn(ApplyRecommendationButton, stack ? 0 : 2);
+        Grid.SetColumnSpan(ApplyRecommendationButton, stack ? 3 : 1);
+        ApplyRecommendationButton.HorizontalAlignment = stack
+            ? HorizontalAlignment.Stretch
+            : HorizontalAlignment.Right;
+        ApplyRecommendationButton.Margin = stack
+            ? new Thickness(0, 4, 0, 0)
+            : new Thickness(0);
     }
 
     internal string T(string key) => _texts[_language].TryGetValue(key, out var value) ? value : key;
@@ -173,9 +339,10 @@ public sealed partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
-        SubtitleText.Text=T("Subtitle"); RefreshButtonText.Text=T("Refresh"); FeaturesButtonText.Text=T("Features");InsightsButtonText.Text=T("Insights");RecoveryCenterButtonText.Text=T("RecoveryCenter"); LanguageButton.Content=T("Language");LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
+        SubtitleText.Text=T("Subtitle"); RefreshButtonText.Text=T("Refresh"); FeaturesButtonText.Text=T("Features");InsightsButtonText.Text=T("Insights");RecoveryCenterButtonText.Text=T("RecoveryCenter"); LanguageButtonText.Text=T("Language");LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
         AutoQuickText.Text=T("Auto");LiveQuickText.Text=T("Live");
-        AutomationProperties.SetName(ExperienceModeButton,T("ExperienceModeAutomation"));AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));AutomationProperties.SetName(RecoveryCenterButton,T("RecoveryCenter"));
+        OverflowAutoQuickToggle.Text=T("Auto");OverflowLiveQuickToggle.Text=T("Live");OverflowFeaturesMenuItem.Text=T("Features");OverflowInsightsMenuItem.Text=T("Insights");
+        AutomationProperties.SetName(ExperienceModeButton,T("ExperienceModeAutomation"));AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));AutomationProperties.SetName(RecoveryCenterButton,T("RecoveryCenter"));AutomationProperties.SetName(LanguageButton,T("Language"));AutomationProperties.SetName(MoreButton,T("More"));
         ModeTitle.Text=T("Mode"); GpuTitle.Text=T("Gpu"); PowerTitle.Text=T("Power"); CpuTitle.Text=T("Cpu"); BrightnessTitle.Text=T("Brightness"); SleepTitle.Text=T("Sleep");
         ModesTitle.Text=T("Modes"); ModesHintText.Text=T("ModesHint"); RemoteButtonText.Text=T("Remote"); SaverButtonText.Text=T("Saver"); BalancedButtonText.Text=T("Balanced"); HighButtonText.Text=T("High");
         RemoteDescription.Text=T("RemoteDesc");SaverDescription.Text=T("SaverDesc");BalancedDescription.Text=T("BalancedDesc");HighDescription.Text=T("HighDesc");
@@ -195,6 +362,7 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(FeaturesButton,_language=="zh"?"打开自动化、托盘和保护设置":"Open automation, tray and protection settings");
         ToolTipService.SetToolTip(InsightsButton,_language=="zh"?"查看硬件监控和系统洞察":"View hardware monitoring and system insights");
         ToolTipService.SetToolTip(RecoveryCenterButton,_language=="zh"?"撤销模式操作或安全恢复配置":"Undo a mode operation or safely restore configuration");
+        ToolTipService.SetToolTip(MoreButton,_language=="zh"?"显示更多专业操作":"Show more professional actions");
         ToolTipService.SetToolTip(LanguageButton,_language=="zh"?"切换到 English":"Switch to Chinese");
         ToolTipService.SetToolTip(CopyLogButton,_language=="zh"?"复制本次会话日志":"Copy this session log");
         ToolTipService.SetToolTip(ClearLogButton,_language=="zh"?"清空本次会话日志":"Clear this session log");
@@ -202,6 +370,7 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(SaverButton,_language=="zh"?"切换到低功耗（快捷键 2）":"Switch to Saver (shortcut 2)");
         ToolTipService.SetToolTip(BalancedButton,_language=="zh"?"切换到平衡（快捷键 3）":"Switch to Balanced (shortcut 3)");
         ToolTipService.SetToolTip(HighButton,_language=="zh"?"切换到高性能（快捷键 4）":"Switch to High performance (shortcut 4)");
+        UpdateActiveMode(_activeModeKey);
         RenderRecommendation();
     }
 
@@ -459,27 +628,31 @@ public sealed partial class MainWindow : Window
     private Task<bool> RunModeAsync(params string[] args)=>RunModeCoreAsync(args,SwitchRequestContext.Manual);
     private void UpdateActiveMode(string? activeMode)
     {
-        activeMode = NormalizeMode(activeMode, "unknown");
         var buttons=new[]
         {
-            (Mode:"remote",Button:RemoteButton,Name:T("ModeRemote")),
-            (Mode:"saver",Button:SaverButton,Name:T("ModeSaver")),
-            (Mode:"balanced",Button:BalancedButton,Name:T("ModeBalanced")),
-            (Mode:"high",Button:HighButton,Name:T("ModeHigh"))
+            (Mode:"remote",Button:RemoteButton,Check:RemoteCheckIcon,Badge:RemoteCurrentBadge,BadgeText:RemoteCurrentBadgeText,Progress:RemoteProgressRing,Name:T("ModeRemote")),
+            (Mode:"saver",Button:SaverButton,Check:SaverCheckIcon,Badge:SaverCurrentBadge,BadgeText:SaverCurrentBadgeText,Progress:SaverProgressRing,Name:T("ModeSaver")),
+            (Mode:"balanced",Button:BalancedButton,Check:BalancedCheckIcon,Badge:BalancedCurrentBadge,BadgeText:BalancedCurrentBadgeText,Progress:BalancedProgressRing,Name:T("ModeBalanced")),
+            (Mode:"high",Button:HighButton,Check:HighCheckIcon,Badge:HighCurrentBadge,BadgeText:HighCurrentBadgeText,Progress:HighProgressRing,Name:T("ModeHigh"))
         };
         foreach(var item in buttons)
         {
             var state=ModeButtonPresentation.Evaluate(item.Mode,activeMode,_pendingMode,_modeSwitchInProgress,item.Name,IsChinese);
             var button=item.Button;
+            button.IsEnabled=state.IsEnabled;
             AutomationProperties.SetItemStatus(button,state.ItemStatus);
             AutomationProperties.SetName(button,state.AutomationName);
-            var isActive=state.ShowCheckmark;
-            if(isActive)
+            item.Check.Visibility=state.ShowCheckmark?Visibility.Visible:Visibility.Collapsed;
+            item.Badge.Visibility=state.ShowCurrentBadge?Visibility.Visible:Visibility.Collapsed;
+            item.BadgeText.Text=state.BadgeText;
+            item.Progress.IsActive=state.ShowProgress;
+            item.Progress.Visibility=state.ShowProgress?Visibility.Visible:Visibility.Collapsed;
+            if(state.IsCurrent)
             {
-                button.Background=(Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-                button.Foreground=(Brush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"];
+                button.Background=(Brush)Application.Current.Resources["AccentFillColorSecondaryBrush"];
             }
-            else{button.ClearValue(Control.BackgroundProperty);button.ClearValue(Control.ForegroundProperty);}
+            else button.ClearValue(Control.BackgroundProperty);
+            button.ClearValue(Control.ForegroundProperty);
         }
     }
 

@@ -274,6 +274,26 @@ public sealed class RecommendationUiLogicTests
     }
 
     [Fact]
+    public void CreateApplyButtonState_CurrentComparisonIsTypedCaseInsensitiveAndTrimmed()
+    {
+        var recommendation = new ModeRecommendation(
+            "balanced",
+            "reason",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.DailyAc);
+
+        var result = RecommendationUiLogic.CreateApplyButtonState(
+            recommendation,
+            " BALANCED ",
+            isApplying: false,
+            isChinese: false);
+
+        Assert.False(result.IsEnabled);
+        Assert.Equal("Current mode", result.Text);
+    }
+
+    [Fact]
     public async Task RecommendationApplyGate_ConcurrentSecondRequestDoesNotEnterAction()
     {
         var gate = new RecommendationApplyGate();

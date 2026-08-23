@@ -103,14 +103,7 @@ public sealed partial class MainWindow
     {
         _featureSettings.ExperienceMode=mode;
         var professional=mode==ExperienceMode.Professional;
-        ProfessionalQuickActions.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
         ProfessionalModeControls.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
-        ProfessionalLogPanel.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
-        MainContentGrid.ColumnSpacing=professional?16:0;
-        MainContentGrid.ColumnDefinitions[0].Width=
-            professional?new GridLength(390):new GridLength(1,GridUnitType.Star);
-        MainContentGrid.ColumnDefinitions[1].Width=
-            professional?new GridLength(1,GridUnitType.Star):new GridLength(0);
         ExperienceModeText.Text=professional
             ?(IsChinese?"专业":"Professional")
             :(IsChinese?"简单":"Simple");
@@ -152,6 +145,7 @@ public sealed partial class MainWindow
     {
         ApplyExperienceMode(settings.ExperienceMode);
         AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
+        OverflowAutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;OverflowLiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
         if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
     }
 
@@ -362,6 +356,16 @@ public sealed partial class MainWindow
     private void FeaturesButton_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();OpenRecoveryCenterButton_Click(sender,e);return;}if(_settingsWindow is not null){_settingsWindow.Activate();return;}_settingsWindow=new SettingsWindow(this,_featureSettings,IsChinese);_settingsWindow.Closed+=(_,_)=>_settingsWindow=null;_settingsWindow.Activate();}
     private void AutoQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.AutoSwitchEnabled=AutoQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"自动切换已{(_featureSettings.AutoSwitchEnabled?"开启":"关闭")}"):($"Automatic switching {(_featureSettings.AutoSwitchEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
     private void LiveQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.RealTimeMonitoringEnabled=LiveQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"实时监控已{(_featureSettings.RealTimeMonitoringEnabled?"开启":"关闭")}"):($"Live monitoring {(_featureSettings.RealTimeMonitoringEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
+    private void OverflowAutoQuickToggle_Click(object sender,RoutedEventArgs e)
+    {
+        AutoQuickToggle.IsChecked=OverflowAutoQuickToggle.IsChecked;
+        AutoQuickToggle_Click(sender,e);
+    }
+    private void OverflowLiveQuickToggle_Click(object sender,RoutedEventArgs e)
+    {
+        LiveQuickToggle.IsChecked=OverflowLiveQuickToggle.IsChecked;
+        LiveQuickToggle_Click(sender,e);
+    }
 
     private async void RootGrid_KeyDown(object sender,KeyRoutedEventArgs e)
     {
@@ -408,6 +412,7 @@ public sealed partial class MainWindow
             WifiOnButton,policy[CapabilityFeature.WifiControl]);
         ApplyCapabilityPresentation(
             RemoteNoWifiButton,policy[CapabilityFeature.WifiControl]);
+        ApplyResponsiveLayout(RootGrid.ActualWidth);
         _settingsWindow?.ApplyCapabilityPresentation(
             _featureSettings.ExperienceMode,_hardwareCapabilities);
     }

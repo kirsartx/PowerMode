@@ -1,55 +1,54 @@
 namespace PowerModeWinUI;
 
 internal sealed record ModeButtonPresentationState(
+    bool IsCurrent,
     bool IsEnabled,
     bool ShowCheckmark,
     bool ShowCurrentBadge,
-    string BadgeText,
     bool ShowProgress,
+    string BadgeText,
     string AutomationName,
     string ItemStatus);
 
 internal static class ModeButtonPresentation
 {
     public static ModeButtonPresentationState Evaluate(
-        string mode,
-        string currentMode,
+        string buttonMode,
+        string? activeMode,
         string? pendingMode,
-        bool isSwitching,
-        string displayName,
+        bool switchInProgress,
+        string localizedModeName,
         bool isChinese)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(mode);
-        ArgumentException.ThrowIfNullOrWhiteSpace(currentMode);
-        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(buttonMode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(localizedModeName);
 
-        var normalizedMode = mode.Trim();
-        var normalizedCurrent = currentMode.Trim();
-        var normalizedPending = pendingMode?.Trim();
         var isCurrent = string.Equals(
-            normalizedMode,
-            normalizedCurrent,
+            buttonMode.Trim(),
+            activeMode?.Trim(),
             StringComparison.OrdinalIgnoreCase);
-        var isPending = isSwitching && string.Equals(
-            normalizedMode,
-            normalizedPending,
+        var isPending = switchInProgress && string.Equals(
+            buttonMode.Trim(),
+            pendingMode?.Trim(),
             StringComparison.OrdinalIgnoreCase);
         var currentText = isChinese ? "当前" : "Current";
-        var switchingText = isChinese ? "正在切换" : "Switching";
-        var automationName = displayName.Trim();
-        if (isCurrent)
-            automationName += isChinese ? "，当前模式" : ", current mode";
-        else if (isPending)
-            automationName += isChinese ? "，正在切换" : ", switching";
+        var pendingText = isChinese ? "正在切换" : "Switching";
+        var itemStatus = isCurrent
+            ? (isChinese ? "当前模式" : "Current mode")
+            : isPending
+                ? pendingText
+                : string.Empty;
 
         return new(
-            !isSwitching,
+            isCurrent,
+            !switchInProgress,
             isCurrent,
             isCurrent,
-            isCurrent ? currentText : string.Empty,
             isPending,
-            automationName,
-            isCurrent ? (isChinese ? "当前模式" : "Current mode") :
-                isPending ? switchingText : string.Empty);
+            isCurrent ? currentText : string.Empty,
+            string.IsNullOrWhiteSpace(itemStatus)
+                ? localizedModeName.Trim()
+                : $"{localizedModeName.Trim()}{(isChinese ? "，" : ", ")}{itemStatus}",
+            itemStatus);
     }
 }
