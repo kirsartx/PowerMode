@@ -76,4 +76,57 @@ public sealed class ModeButtonPresentationTests
         Assert.Equal("Balanced, Current mode", state.AutomationName);
         Assert.Equal("Current mode", state.ItemStatus);
     }
+
+    [Theory]
+    [InlineData(true, "平衡，当前模式，正在切换", "当前模式，正在切换")]
+    [InlineData(false, "Balanced, Current mode, Switching", "Current mode, Switching")]
+    public void Evaluate_CurrentModeIsAlsoPending_ExposesBothStates(
+        bool isChinese,
+        string expectedAutomationName,
+        string expectedItemStatus)
+    {
+        var state = ModeButtonPresentation.Evaluate(
+            "balanced",
+            "balanced",
+            "balanced",
+            switchInProgress: true,
+            isChinese ? "平衡" : "Balanced",
+            isChinese);
+
+        Assert.True(state.IsCurrent);
+        Assert.True(state.ShowProgress);
+        Assert.Equal(expectedAutomationName, state.AutomationName);
+        Assert.Equal(expectedItemStatus, state.ItemStatus);
+    }
+
+    [Fact]
+    public void ActiveProjection_ReadBackTransitionRefreshesModesAndRecommendation()
+    {
+        var recommendation = new ModeRecommendation(
+            "balanced",
+            "reason",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.DailyAc);
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["remote"] = "Remote",
+            ["saver"] = "Saver",
+            ["balanced"] = "Balanced",
+            ["high"] = "High performance"
+        };
+
+        var before = ActiveModePresentation.Project(
+            "saver", null, false, false, recommendation, names, false);
+        var after = ActiveModePresentation.Project(
+            "balanced", null, false, false, recommendation, names, false);
+
+        Assert.False(before.ModeButtons["balanced"].IsCurrent);
+        Assert.True(before.Recommendation!.IsEnabled);
+        Assert.Equal("Apply", before.Recommendation.Text);
+        Assert.True(after.ModeButtons["balanced"].IsCurrent);
+        Assert.Contains("Current mode", after.ModeButtons["balanced"].AutomationName);
+        Assert.False(after.Recommendation!.IsEnabled);
+        Assert.Equal("Current mode", after.Recommendation.Text);
+    }
 }

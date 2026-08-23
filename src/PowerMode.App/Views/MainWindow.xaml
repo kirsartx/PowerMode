@@ -7,7 +7,6 @@
     <Grid x:Name="RootGrid" Padding="28,22" RowSpacing="18" UseLayoutRounding="True" SizeChanged="RootGrid_SizeChanged" KeyDown="RootGrid_KeyDown">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -70,7 +69,22 @@
             </StackPanel>
         </Grid>
 
-        <Grid x:Name="StatusCardsGrid" Grid.Row="1" ColumnSpacing="10" RowSpacing="10">
+        <ScrollViewer x:Name="AdaptiveContentScrollViewer"
+                      Grid.Row="1"
+                      VerticalScrollMode="Disabled"
+                      VerticalScrollBarVisibility="Disabled"
+                      HorizontalScrollMode="Disabled"
+                      HorizontalScrollBarVisibility="Disabled"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch"
+                      ZoomMode="Disabled">
+            <Grid x:Name="AdaptiveContentGrid" RowSpacing="18">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+        <Grid x:Name="StatusCardsGrid" Grid.Row="0" ColumnSpacing="10" RowSpacing="10">
             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
             <Border x:Name="ModeStatusCard" Grid.Row="0" Grid.Column="0" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE8D7;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="ModeTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="ModeValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
@@ -81,7 +95,7 @@
             <Border x:Name="SleepStatusCard" Grid.Row="1" Grid.Column="2" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE708;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="SleepTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="SleepValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
         </Grid>
 
-        <Grid x:Name="MainContentGrid" Grid.Row="2" ColumnSpacing="16" RowSpacing="0">
+        <Grid x:Name="MainContentGrid" Grid.Row="1" ColumnSpacing="16" RowSpacing="0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="0"/></Grid.RowDefinitions>
             <Border x:Name="ModePanel" Style="{StaticResource PanelStyle}">
@@ -122,7 +136,7 @@
                                         Click="ApplyRecommendationButton_Click"/>
                             </Grid>
                         </Border>
-                        <Grid ColumnSpacing="8" RowSpacing="8">
+                        <Grid x:Name="ModeButtonsGrid" ColumnSpacing="8" RowSpacing="8">
                             <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                             <Button x:Name="RemoteButton" AutomationProperties.AcceleratorKey="1" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" MinHeight="64" Click="RemoteButton_Click">
@@ -228,9 +242,11 @@
                 </Grid>
             </Border>
         </Grid>
+            </Grid>
+        </ScrollViewer>
 
         <InfoBar x:Name="StatusBar"
-                 Grid.Row="3"
+                 Grid.Row="2"
                  IsOpen="True"
                  IsClosable="True"
                  Severity="Informational"

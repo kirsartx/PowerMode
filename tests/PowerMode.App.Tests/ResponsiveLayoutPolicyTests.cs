@@ -8,8 +8,11 @@ public sealed class ResponsiveLayoutPolicyTests
     public void Constants_ExposeApprovedMinimums()
     {
         Assert.Equal(720, ResponsiveLayoutPolicy.MinimumWidth);
+        Assert.Equal(560, ResponsiveLayoutPolicy.MinimumHeight);
         Assert.Equal(760, ResponsiveLayoutPolicy.MediumMinimumWidth);
         Assert.Equal(1040, ResponsiveLayoutPolicy.WideMinimumWidth);
+        Assert.Equal(1120, ResponsiveLayoutPolicy.DefaultWidth);
+        Assert.Equal(760, ResponsiveLayoutPolicy.DefaultHeight);
     }
 
     [Theory]
@@ -33,7 +36,7 @@ public sealed class ResponsiveLayoutPolicyTests
     public void ReflowStatusCards_HiddenCardsLeaveNoGaps()
     {
         var placements = ResponsiveLayoutPolicy.ReflowStatusCards(
-            [StatusCardId.Mode, StatusCardId.Gpu, StatusCardId.Cpu, StatusCardId.Sleep],
+            [StatusCardId.Mode, StatusCardId.Power, StatusCardId.Cpu, StatusCardId.Sleep],
             3);
 
         Assert.Equal(
@@ -128,5 +131,92 @@ public sealed class ResponsiveLayoutPolicyTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ResponsiveLayoutPolicy.ReflowStatusCards([StatusCardId.Mode], 0));
+    }
+
+    [Theory]
+    [InlineData(720, 560, (int)LayoutTier.Narrow, 6)]
+    [InlineData(760, 560, (int)LayoutTier.Medium, 3)]
+    [InlineData(760, 760, (int)LayoutTier.Medium, 3)]
+    public void Project_ConstrainedNarrowAndMediumKeepChromeBoundedAndContentScrollable(
+        double width,
+        double height,
+        int expectedTierValue,
+        int expectedStatusRows)
+    {
+        var projection = ResponsiveLayoutPolicy.Project(
+            width,
+            height,
+            ExperienceMode.Professional,
+            Enum.GetValues<StatusCardId>());
+
+        Assert.Equal((LayoutTier)expectedTierValue, projection.Layout.Tier);
+        Assert.Equal(
+            [GridLengthProjection.Auto, GridLengthProjection.Star, GridLengthProjection.Auto],
+            projection.RootRows);
+        Assert.True(projection.EnableVerticalContentScroll);
+        Assert.Equal(
+            [GridLengthProjection.Auto, GridLengthProjection.Auto],
+            projection.ContentRows);
+        Assert.Equal(expectedStatusRows, projection.StatusCardRows);
+        Assert.Equal(
+            [GridLengthProjection.Auto, GridLengthProjection.Auto],
+            projection.MainRows);
+        Assert.True(projection.Layout.ProfessionalLogMinimumHeight is 180 or 220);
+        Assert.Equal(6, projection.StatusCards.Count);
+    }
+
+    [Fact]
+    public void Project_SimpleNarrowPreservesContentHeightInsideScrollableViewport()
+    {
+        var projection = ResponsiveLayoutPolicy.Project(
+            720,
+            560,
+            ExperienceMode.Simple,
+            Enum.GetValues<StatusCardId>());
+
+        Assert.True(projection.EnableVerticalContentScroll);
+        Assert.True(projection.Layout.ModePanelUsesContentHeight);
+        Assert.Equal(
+            [GridLengthProjection.Auto, GridLengthProjection.Fixed(0)],
+            projection.MainRows);
+    }
+
+    [Theory]
+    [InlineData(1040)]
+    [InlineData(1120)]
+    public void Project_ProfessionalWideUsesFixedPanelAndOneColumnModeButtons(double width)
+    {
+        var projection = ResponsiveLayoutPolicy.Project(
+            width,
+            760,
+            ExperienceMode.Professional,
+            Enum.GetValues<StatusCardId>());
+
+        Assert.Equal(LayoutTier.Wide, projection.Layout.Tier);
+        Assert.False(projection.EnableVerticalContentScroll);
+        Assert.Equal(
+            [GridLengthProjection.Fixed(390), GridLengthProjection.Star],
+            projection.MainColumns);
+        Assert.Equal(1, projection.ModeButtonColumns);
+        Assert.Equal(
+            [(0, 0), (1, 0), (2, 0), (3, 0)],
+            projection.ModeButtons.Select(item => (item.Row, item.Column)));
+    }
+
+    [Fact]
+    public void Project_ProjectsToolbarOverflowAndGaplessVisibleCards()
+    {
+        var projection = ResponsiveLayoutPolicy.Project(
+            720,
+            560,
+            ExperienceMode.Professional,
+            [StatusCardId.Mode, StatusCardId.Power, StatusCardId.Cpu, StatusCardId.Sleep]);
+
+        Assert.True(projection.ShowToolbarOverflow);
+        Assert.Equal(ToolbarDisplay.Overflow, projection.Layout.Toolbar[ToolbarAction.Auto]);
+        Assert.Equal(ToolbarDisplay.IconOnly, projection.Layout.Toolbar[ToolbarAction.Recovery]);
+        Assert.Equal(
+            [(0, 0), (1, 0), (2, 0), (3, 0)],
+            projection.StatusCards.Select(item => (item.Row, item.Column)));
     }
 }

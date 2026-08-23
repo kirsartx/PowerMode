@@ -95,28 +95,19 @@ public sealed class FluentAccessibilityPresentationTests
     }
 
     [Fact]
-    public void MainWindow_UsesTypedAdaptiveAndLocalizedModePresentation()
+    public void MainWindow_DeclaresBoundedAdaptiveViewportAndModeGrid()
     {
-        var mainSource = File.ReadAllText(FindRepositoryFile(
-            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs"));
-        var featureSource = File.ReadAllText(FindRepositoryFile(
-            "src", "PowerMode.App", "Views", "MainWindow.Features.cs"));
-        var advancedSource = File.ReadAllText(FindRepositoryFile(
-            "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
-        var compactMain = Minify(mainSource);
+        var document = XDocument.Load(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml"));
 
-        Assert.Contains("ResponsiveLayoutPolicy.Evaluate(", mainSource);
-        Assert.Contains("ResponsiveLayoutPolicy.ReflowStatusCards(", mainSource);
-        Assert.Contains("Grid.SetRow(", mainSource);
-        Assert.Contains("Grid.SetColumn(", mainSource);
-        Assert.Contains("ModeButtonPresentation.Evaluate(", mainSource);
-        Assert.Contains("AutomationProperties.SetName(button,state.AutomationName)", compactMain);
-        Assert.Contains("AutomationProperties.SetItemStatus(button,state.ItemStatus)", compactMain);
-        Assert.Contains("DpiAwareWindowSizer.TryRestore(this,720,560)", compactMain);
-        Assert.Contains("DpiAwareWindowSizer.Resize(this,1120,760,720,560,center:true)", compactMain);
-        Assert.Contains("ApplyResponsiveLayout(", featureSource);
-        Assert.Contains("_activeModeKey", advancedSource);
-        Assert.DoesNotContain("_featureSettings.LastMode,", advancedSource[advancedSource.IndexOf("private void RenderRecommendation", StringComparison.Ordinal)..]);
+        var viewport = NamedElement(document, "AdaptiveContentScrollViewer");
+        var statusCards = NamedElement(document, "StatusCardsGrid");
+        var mainContent = NamedElement(document, "MainContentGrid");
+        _ = NamedElement(document, "AdaptiveContentGrid");
+        _ = NamedElement(document, "ModeButtonsGrid");
+
+        Assert.Contains(viewport, statusCards.Ancestors());
+        Assert.Contains(viewport, mainContent.Ancestors());
     }
 
     [Fact]

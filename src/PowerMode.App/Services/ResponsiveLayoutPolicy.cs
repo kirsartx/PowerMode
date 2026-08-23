@@ -50,9 +50,60 @@ internal readonly record struct CardPlacement(
     int Row,
     int Column);
 
+internal enum StandardModeButtonId
+{
+    Remote,
+    Saver,
+    Balanced,
+    High
+}
+
+internal readonly record struct ModeButtonPlacement(
+    StandardModeButtonId Button,
+    int Row,
+    int Column);
+
+internal enum GridLengthProjectionKind
+{
+    Auto,
+    Star,
+    Fixed
+}
+
+internal readonly record struct GridLengthProjection(
+    GridLengthProjectionKind Kind,
+    double Value)
+{
+    public static GridLengthProjection Auto { get; } =
+        new(GridLengthProjectionKind.Auto, 0);
+    public static GridLengthProjection Star { get; } =
+        new(GridLengthProjectionKind.Star, 1);
+    public static GridLengthProjection Fixed(double value) =>
+        new(GridLengthProjectionKind.Fixed, value);
+}
+
+internal sealed record ResponsiveDashboardProjection(
+    double LogicalWidth,
+    double LogicalHeight,
+    ResponsiveLayoutState Layout,
+    IReadOnlyList<GridLengthProjection> RootRows,
+    bool EnableVerticalContentScroll,
+    IReadOnlyList<GridLengthProjection> ContentRows,
+    IReadOnlyList<GridLengthProjection> MainColumns,
+    IReadOnlyList<GridLengthProjection> MainRows,
+    IReadOnlyList<CardPlacement> StatusCards,
+    int StatusCardRows,
+    IReadOnlyList<ModeButtonPlacement> ModeButtons,
+    int ModeButtonColumns,
+    bool StackRecommendationContent,
+    bool ShowToolbarOverflow);
+
 internal static class ResponsiveLayoutPolicy
 {
+    public const double DefaultWidth = 1120;
+    public const double DefaultHeight = 760;
     public const double MinimumWidth = 720;
+    public const double MinimumHeight = 560;
     public const double MediumMinimumWidth = 760;
     public const double WideMinimumWidth = 1040;
 
@@ -116,4 +167,71 @@ internal static class ResponsiveLayoutPolicy
 
     public static bool ShouldStackAuxiliaryContent(double logicalWidth) =>
         logicalWidth < MediumMinimumWidth;
+
+    public static ResponsiveDashboardProjection Project(
+        double logicalWidth,
+        double logicalHeight,
+        ExperienceMode experienceMode,
+        IReadOnlyList<StatusCardId> visibleCards)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(logicalWidth, 0);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(logicalHeight, 0);
+        ArgumentNullException.ThrowIfNull(visibleCards);
+
+        var layout = Evaluate(logicalWidth, experienceMode);
+        var statusCards = ReflowStatusCards(
+            visibleCards,
+            layout.StatusCardColumns);
+        var statusRows = Math.Max(
+            1,
+            (visibleCards.Count + layout.StatusCardColumns - 1) /
+                layout.StatusCardColumns);
+        var enableVerticalScroll = layout.Tier != LayoutTier.Wide;
+        var professional = experienceMode == ExperienceMode.Professional;
+        var modeButtonColumns = professional && layout.Tier == LayoutTier.Wide
+            ? 1
+            : 2;
+        var modeButtons = Enum.GetValues<StandardModeButtonId>()
+            .Select((button, index) => new ModeButtonPlacement(
+                button,
+                index / modeButtonColumns,
+                index % modeButtonColumns))
+            .ToArray();
+
+        IReadOnlyList<GridLengthProjection> mainColumns;
+        IReadOnlyList<GridLengthProjection> mainRows;
+        if (layout.ModePanelUsesContentHeight)
+        {
+            mainColumns = [GridLengthProjection.Star, GridLengthProjection.Fixed(0)];
+            mainRows = [GridLengthProjection.Auto, GridLengthProjection.Fixed(0)];
+        }
+        else if (layout.StackMainContent)
+        {
+            mainColumns = [GridLengthProjection.Star, GridLengthProjection.Fixed(0)];
+            mainRows = [GridLengthProjection.Auto, GridLengthProjection.Auto];
+        }
+        else
+        {
+            mainColumns = [GridLengthProjection.Fixed(390), GridLengthProjection.Star];
+            mainRows = [GridLengthProjection.Star, GridLengthProjection.Fixed(0)];
+        }
+
+        return new(
+            logicalWidth,
+            logicalHeight,
+            layout,
+            [GridLengthProjection.Auto, GridLengthProjection.Star, GridLengthProjection.Auto],
+            enableVerticalScroll,
+            enableVerticalScroll
+                ? [GridLengthProjection.Auto, GridLengthProjection.Auto]
+                : [GridLengthProjection.Auto, GridLengthProjection.Star],
+            mainColumns,
+            mainRows,
+            statusCards,
+            statusRows,
+            modeButtons,
+            modeButtonColumns,
+            ShouldStackAuxiliaryContent(logicalWidth),
+            layout.Toolbar.Values.Any(display => display == ToolbarDisplay.Overflow));
+    }
 }

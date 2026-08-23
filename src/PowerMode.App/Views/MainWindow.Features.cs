@@ -412,7 +412,7 @@ public sealed partial class MainWindow
             WifiOnButton,policy[CapabilityFeature.WifiControl]);
         ApplyCapabilityPresentation(
             RemoteNoWifiButton,policy[CapabilityFeature.WifiControl]);
-        ApplyResponsiveLayout(RootGrid.ActualWidth);
+        ApplyResponsiveLayout(RootGrid.ActualWidth,RootGrid.ActualHeight);
         _settingsWindow?.ApplyCapabilityPresentation(
             _featureSettings.ExperienceMode,_hardwareCapabilities);
     }

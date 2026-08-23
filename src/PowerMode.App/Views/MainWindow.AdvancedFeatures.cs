@@ -567,7 +567,6 @@ public sealed partial class MainWindow
         }
 
         _modeSwitchInProgress = true;
-        UpdateActiveMode(_activeModeKey);
         RenderRecommendation();
         BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
         StatusText.Text = IsChinese
@@ -609,7 +608,7 @@ public sealed partial class MainWindow
                     _lastCustomProfile = customProfile;
                     _activeModeKey = target.Key;
                     ModeValue.Text = customProfile.Name;
-                    UpdateActiveMode(null);
+                    RenderRecommendation();
                     _featureSettings.LastMode = "saver";
                 }
                 else
@@ -647,7 +646,6 @@ public sealed partial class MainWindow
         {
             _pendingMode = null;
             _modeSwitchInProgress = false;
-            UpdateActiveMode(_activeModeKey);
             BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             RenderRecommendation();
         }
@@ -736,7 +734,10 @@ public sealed partial class MainWindow
 
     private void RenderRecommendation()
     {
+        var activeProjection=ProjectActiveModePresentation();
+        ApplyModeButtonPresentation(activeProjection.ModeButtons);
         if (_currentRecommendation is not { } recommendation ||
+            activeProjection.Recommendation is not { } applyState ||
             RecommendationTitle is null ||
             RecommendationReason is null ||
             ApplyRecommendationButton is null)
@@ -746,20 +747,34 @@ public sealed partial class MainWindow
             recommendation,
             GetModeDisplayName(recommendation.Mode),
             IsChinese);
-        var applyState = RecommendationUiLogic.CreateApplyButtonState(
-            recommendation,
-            _activeModeKey,
-            _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
-            IsChinese);
         RecommendationTitle.Text = presentation.Title;
         RecommendationReason.Text = presentation.Reason;
         ApplyRecommendationButton.Content = applyState.Text;
         ApplyRecommendationButton.IsEnabled = applyState.IsEnabled;
         AutomationProperties.SetName(ApplyRecommendationButton, applyState.Text);
+        AutomationProperties.SetItemStatus(
+            ApplyRecommendationButton,
+            applyState.IsEnabled ? string.Empty : applyState.Text);
         AutomationProperties.SetHelpText(
             ApplyRecommendationButton,
             presentation.AutomationHelpText);
     }
+
+    private ActiveModePresentationState ProjectActiveModePresentation()=>
+        ActiveModePresentation.Project(
+            _activeModeKey,
+            _pendingMode,
+            _modeSwitchInProgress,
+            _recommendationApplyGate.IsEntered,
+            _currentRecommendation,
+            new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["remote"]=T("ModeRemote"),
+                ["saver"]=T("ModeSaver"),
+                ["balanced"]=T("ModeBalanced"),
+                ["high"]=T("ModeHigh")
+            },
+            IsChinese);
 
     private async void ApplyRecommendationButton_Click(
         object sender,
@@ -768,12 +783,8 @@ public sealed partial class MainWindow
         if (_currentRecommendation is not { } recommendation)
             return;
 
-        var state = RecommendationUiLogic.CreateApplyButtonState(
-            recommendation,
-            _activeModeKey,
-            _recommendationApplyGate.IsEntered || _modeSwitchInProgress,
-            IsChinese);
-        if (!state.IsEnabled)
+        var state=ProjectActiveModePresentation().Recommendation;
+        if (state is null || !state.IsEnabled)
             return;
 
         try
