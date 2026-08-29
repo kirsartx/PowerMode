@@ -112,8 +112,10 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
     private static readonly IProcessRunner CapabilityProcessRunner = new ProcessRunner();
     private readonly IMonitoringProbeRunner _probeRunner;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<MonitoringPowerStatus> _powerStatusReader;
     private readonly object _sampleSync = new();
     private readonly object _monitoringSync = new();
+    private readonly CancellationTokenSource _sampleLifetimeCancellation = new();
     private HardwareCapabilities _capabilities = HardwareCapabilities.Unknown;
     private BatteryHealthTelemetry _batteryHealth = BatteryHealthTelemetry.Empty;
     private DateTimeOffset _batteryHealthExpiresAt;
@@ -131,7 +133,8 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         : this(
             new WindowsMonitoringProbeRunner(new ProcessRunner()),
             TimeProvider.System,
-            historyCapacity)
+            historyCapacity,
+            GetPowerStatus)
     {
     }
 
@@ -141,24 +144,35 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         : this(
             new WindowsMonitoringProbeRunner(processRunner),
             TimeProvider.System,
-            historyCapacity)
+            historyCapacity,
+            GetPowerStatus)
     {
     }
 
     internal MonitoringService(
         IMonitoringProbeRunner probeRunner,
         TimeProvider timeProvider)
-        : this(probeRunner, timeProvider, 720)
+        : this(probeRunner, timeProvider, 720, GetPowerStatus)
+    {
+    }
+
+    internal MonitoringService(
+        IMonitoringProbeRunner probeRunner,
+        TimeProvider timeProvider,
+        Func<MonitoringPowerStatus> powerStatusReader)
+        : this(probeRunner, timeProvider, 720, powerStatusReader)
     {
     }
 
     private MonitoringService(
         IMonitoringProbeRunner probeRunner,
         TimeProvider timeProvider,
-        int historyCapacity)
+        int historyCapacity,
+        Func<MonitoringPowerStatus> powerStatusReader)
     {
         _probeRunner = probeRunner ?? throw new ArgumentNullException(nameof(probeRunner));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _powerStatusReader = powerStatusReader ?? throw new ArgumentNullException(nameof(powerStatusReader));
         History = new PowerTelemetryHistory(historyCapacity);
     }
 
@@ -221,6 +235,9 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         if (effectiveTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be positive.");
 
+        if (cancellationToken.IsCancellationRequested)
+            return Task.FromCanceled<PowerTelemetrySample>(cancellationToken);
+
         Task<PowerTelemetrySample> sampleTask;
         lock (_sampleSync)
         {
@@ -232,12 +249,10 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
 
             sampleTask = _inFlightSample is { IsCompleted: false } inFlight
                 ? inFlight
-                : StartSampleLocked(effectiveTimeout, cancellationToken);
+                : StartSampleLocked();
         }
 
-        return cancellationToken.CanBeCanceled
-            ? sampleTask.WaitAsync(cancellationToken)
-            : sampleTask;
+        return sampleTask.WaitAsync(effectiveTimeout, cancellationToken);
     }
 
     private bool TryGetRecentSampleLocked(
@@ -247,7 +262,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         if (_lastSuccessfulSample is { } recent)
         {
             var age = _timeProvider.GetUtcNow() - _lastSuccessfulSampleUtc;
-            if (age <= maximumAge)
+            if (age >= TimeSpan.Zero && age <= maximumAge)
             {
                 sample = recent;
                 return true;
@@ -258,11 +273,9 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         return false;
     }
 
-    private Task<PowerTelemetrySample> StartSampleLocked(
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
+    private Task<PowerTelemetrySample> StartSampleLocked()
     {
-        var task = SampleCoreAsync(timeout, cancellationToken);
+        var task = SampleCoreAsync(_sampleLifetimeCancellation.Token);
         _inFlightSample = task;
         _ = ClearInFlightSampleAsync(task);
         return task;
@@ -289,10 +302,9 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
     }
 
     private async Task<PowerTelemetrySample> SampleCoreAsync(
-        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var timeoutCancellation = new CancellationTokenSource(timeout);
+        using var timeoutCancellation = new CancellationTokenSource(DefaultSampleTimeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeoutCancellation.Token);
@@ -302,16 +314,20 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         lock (_sampleSync)
             capabilities = _capabilities;
 
+        var power = _powerStatusReader();
         var cpuLoadTask = MeasureCpuLoadAsync(probeToken);
         var gpuTask = QueryNvidiaAsync(capabilities, now, probeToken);
         var thermalTask = QueryTemperatureAsync(capabilities, now, probeToken);
-        var batteryHealthTask = GetBatteryHealthAsync(capabilities, now, probeToken);
+        var batteryHealthTask = GetBatteryHealthAsync(
+            capabilities,
+            power.State,
+            now,
+            probeToken);
         var cpuFrequencyMhz = GetCpuFrequencyMhz();
-        var power = GetPowerStatus();
 
         await Task.WhenAll(cpuLoadTask, gpuTask, thermalTask, batteryHealthTask)
             .ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        _sampleLifetimeCancellation.Token.ThrowIfCancellationRequested();
 
         var gpu = await gpuTask.ConfigureAwait(false);
         var thermalTemperature = await thermalTask.ConfigureAwait(false);
@@ -404,11 +420,13 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
 
     private async Task<BatteryHealthTelemetry> GetBatteryHealthAsync(
         HardwareCapabilities capabilities,
+        BatteryChargeState powerState,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
         var support = capabilities.Battery;
-        if (support == CapabilitySupport.Unsupported)
+        if (support == CapabilitySupport.Unsupported ||
+            powerState == BatteryChargeState.NoBattery)
             return BatteryHealthTelemetry.Empty;
 
         lock (_sampleSync)
@@ -438,7 +456,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         {
             _batteryHealth = result;
             _batteryHealthExpiresAt = now +
-                (support == CapabilitySupport.Supported
+                (result.HasData && support == CapabilitySupport.Supported
                     ? BatteryHealthCacheDuration
                     : UnknownProbeRetry);
         }
@@ -544,9 +562,11 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+        var currentPower = _powerStatusReader();
         lock (_sampleSync)
         {
             if (_capabilities.Battery == CapabilitySupport.Unsupported ||
+                currentPower.State == BatteryChargeState.NoBattery ||
                 _lastSuccessfulSample?.BatteryState == BatteryChargeState.NoBattery)
             {
                 throw new InvalidOperationException(
@@ -565,6 +585,22 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
             return;
         _disposed = true;
         await StopMonitoringAsync().ConfigureAwait(false);
+        _sampleLifetimeCancellation.Cancel();
+        Task<PowerTelemetrySample>? sampleTask;
+        lock (_sampleSync)
+            sampleTask = _inFlightSample;
+        if (sampleTask is not null)
+        {
+            try
+            {
+                await sampleTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown cancellation is expected for an in-flight sample.
+            }
+        }
+        _sampleLifetimeCancellation.Dispose();
     }
 
     private async Task MonitorLoopAsync(TimeSpan interval, CancellationToken cancellationToken)
@@ -659,12 +695,12 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         }
     }
 
-    private static PowerStatusSnapshot GetPowerStatus()
+    private static MonitoringPowerStatus GetPowerStatus()
     {
         try
         {
             if (!GetSystemPowerStatus(out var status))
-                return PowerStatusSnapshot.Empty;
+                return MonitoringPowerStatus.Empty;
 
             var batteryFlagKnown = status.BatteryFlag != byte.MaxValue;
             var noBattery = batteryFlagKnown && (status.BatteryFlag & 128) != 0;
@@ -694,7 +730,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
             if (state == BatteryChargeState.Discharging && status.BatteryLifeTime != uint.MaxValue)
                 remaining = TimeSpan.FromSeconds(status.BatteryLifeTime);
 
-            return new PowerStatusSnapshot(
+            return new MonitoringPowerStatus(
                 percent,
                 state,
                 onAc,
@@ -703,7 +739,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
         }
         catch
         {
-            return PowerStatusSnapshot.Empty;
+            return MonitoringPowerStatus.Empty;
         }
     }
 
@@ -880,17 +916,6 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
     }
 
     private readonly record struct CpuTimes(ulong Idle, ulong Kernel, ulong User);
-
-    private readonly record struct PowerStatusSnapshot(
-        byte? Percent,
-        BatteryChargeState State,
-        bool? IsOnAcPower,
-        bool IsCritical,
-        TimeSpan? EstimatedRemaining)
-    {
-        public static PowerStatusSnapshot Empty { get; } =
-            new(null, BatteryChargeState.Unknown, null, false, null);
-    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeFileTime

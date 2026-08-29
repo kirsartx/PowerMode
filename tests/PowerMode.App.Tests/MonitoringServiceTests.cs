@@ -26,6 +26,54 @@ public sealed class MonitoringServiceTests
     }
 
     [Fact]
+    public async Task SampleAsync_NoBatteryStatus_SkipsBatteryHealthBeforeCapabilityDetection()
+    {
+        var runner = new CountingProbeRunner();
+        var noBattery = new MonitoringPowerStatus(
+            null,
+            BatteryChargeState.NoBattery,
+            null,
+            false,
+            null);
+        await using var service = new MonitoringService(
+            runner,
+            new ManualTimeProvider(Start),
+            () => noBattery);
+        service.UpdateCapabilities(Capabilities(
+            battery: CapabilitySupport.Unknown,
+            nvidiaGpu: CapabilitySupport.Unsupported,
+            nvidiaSmi: CapabilitySupport.Unsupported,
+            temperature: CapabilitySupport.Unsupported));
+
+        var sample = await service.SampleAsync();
+
+        Assert.Equal(BatteryChargeState.NoBattery, sample.BatteryState);
+        Assert.Equal(0, runner.BatteryHealthCalls);
+    }
+
+    [Fact]
+    public async Task GenerateBatteryReportAsync_NoBatteryStatus_RejectsBeforeCapabilityDetection()
+    {
+        var runner = new CountingProbeRunner();
+        var noBattery = new MonitoringPowerStatus(
+            null,
+            BatteryChargeState.NoBattery,
+            null,
+            false,
+            null);
+        await using var service = new MonitoringService(
+            runner,
+            new ManualTimeProvider(Start),
+            () => noBattery);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GenerateBatteryReportAsync(
+                Path.Combine(Path.GetTempPath(), $"PowerMode-no-battery-{Guid.NewGuid():N}.html")));
+
+        Assert.Equal(0, runner.BatteryReportCalls);
+    }
+
+    [Fact]
     public async Task SampleAsync_UnknownProbes_RetryOnlyAfterFiveMinutes()
     {
         var time = new ManualTimeProvider(Start);
@@ -75,6 +123,46 @@ public sealed class MonitoringServiceTests
     }
 
     [Fact]
+    public async Task SampleAsync_FirstCallerTimeout_DoesNotCancelLaterCaller()
+    {
+        var runner = new CountingProbeRunner { BlockNvidia = true };
+        await using var service = CreateService(runner);
+        service.UpdateCapabilities(SupportedNvidiaCapabilities());
+
+        var first = service.SampleAsync(timeout: TimeSpan.FromMilliseconds(50));
+        await runner.NvidiaStarted.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<TimeoutException>(() => first);
+
+        var second = service.SampleAsync(timeout: TimeSpan.FromSeconds(2));
+        Assert.Equal(1, runner.NvidiaCalls);
+        runner.ReleaseNvidia();
+
+        await second;
+        Assert.Equal(1, runner.NvidiaCalls);
+    }
+
+    [Fact]
+    public async Task SampleAsync_FirstCallerCancellation_DoesNotCancelLaterCaller()
+    {
+        var runner = new CountingProbeRunner { BlockNvidia = true };
+        await using var service = CreateService(runner);
+        service.UpdateCapabilities(SupportedNvidiaCapabilities());
+        using var firstCancellation = new CancellationTokenSource();
+
+        var first = service.SampleAsync(cancellationToken: firstCancellation.Token);
+        await runner.NvidiaStarted.WaitAsync(TimeSpan.FromSeconds(2));
+        firstCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+
+        var second = service.SampleAsync(timeout: TimeSpan.FromSeconds(2));
+        Assert.Equal(1, runner.NvidiaCalls);
+        runner.ReleaseNvidia();
+
+        await second;
+        Assert.Equal(1, runner.NvidiaCalls);
+    }
+
+    [Fact]
     public async Task GetOrSampleAsync_RecentSample_ReusesSnapshot()
     {
         var runner = new CountingProbeRunner();
@@ -95,6 +183,50 @@ public sealed class MonitoringServiceTests
     }
 
     [Fact]
+    public async Task TryGetRecentSample_FutureDatedSample_IsNotFresh()
+    {
+        var time = new ManualTimeProvider(Start);
+        var runner = new CountingProbeRunner();
+        await using var service = new MonitoringService(runner, time);
+        service.UpdateCapabilities(Capabilities(
+            battery: CapabilitySupport.Unsupported,
+            nvidiaGpu: CapabilitySupport.Unsupported,
+            nvidiaSmi: CapabilitySupport.Unsupported,
+            temperature: CapabilitySupport.Unsupported));
+
+        await service.SampleAsync();
+        time.Advance(TimeSpan.FromSeconds(-1));
+
+        Assert.False(service.TryGetRecentSample(TimeSpan.FromMinutes(1), out _));
+    }
+
+    [Fact]
+    public async Task BatteryHealthFailure_ExpiresAfterFiveMinutes_NotThirty()
+    {
+        var time = new ManualTimeProvider(Start);
+        var runner = new CountingProbeRunner
+        {
+            BatteryHealthResult = BatteryHealthTelemetry.Empty
+        };
+        await using var service = new MonitoringService(runner, time);
+        service.UpdateCapabilities(Capabilities(
+            battery: CapabilitySupport.Supported,
+            nvidiaGpu: CapabilitySupport.Unsupported,
+            nvidiaSmi: CapabilitySupport.Unsupported,
+            temperature: CapabilitySupport.Unsupported));
+
+        await service.SampleAsync();
+        time.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(59));
+        await service.SampleAsync();
+        Assert.Equal(1, runner.BatteryHealthCalls);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await service.SampleAsync();
+
+        Assert.Equal(2, runner.BatteryHealthCalls);
+    }
+
+    [Fact]
     public async Task StopMonitoringAsync_CancelsAndAwaitsActiveLoop()
     {
         var runner = new CountingProbeRunner { BlockNvidia = true };
@@ -109,9 +241,11 @@ public sealed class MonitoringServiceTests
 
         var stop = service.StopMonitoringAsync();
 
-        await runner.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(2));
         await stop.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.False(service.IsMonitoring);
+        Assert.False(runner.CancellationObserved.IsCompleted);
+        runner.ReleaseNvidia();
+        await runner.NvidiaCompleted.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
@@ -167,6 +301,13 @@ public sealed class MonitoringServiceTests
     private static MonitoringService CreateService(CountingProbeRunner runner) =>
         new(runner, new ManualTimeProvider(Start));
 
+    private static HardwareCapabilities SupportedNvidiaCapabilities() =>
+        Capabilities(
+            battery: CapabilitySupport.Unsupported,
+            nvidiaGpu: CapabilitySupport.Supported,
+            nvidiaSmi: CapabilitySupport.Supported,
+            temperature: CapabilitySupport.Unsupported);
+
     private static HardwareCapabilities Capabilities(
         CapabilitySupport battery,
         CapabilitySupport nvidiaGpu,
@@ -190,12 +331,16 @@ public sealed class MonitoringServiceTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _cancellationObserved =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _nvidiaCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _nvidiaCalls;
         private int _temperatureCalls;
         private int _batteryHealthCalls;
         private int _batteryReportCalls;
 
         public bool BlockNvidia { get; init; }
+        public BatteryHealthTelemetry BatteryHealthResult { get; init; } =
+            new(50_000, 45_000, 90, 100);
         public int NvidiaCalls => Volatile.Read(ref _nvidiaCalls);
         public int TemperatureCalls => Volatile.Read(ref _temperatureCalls);
         public int BatteryHealthCalls => Volatile.Read(ref _batteryHealthCalls);
@@ -204,6 +349,7 @@ public sealed class MonitoringServiceTests
             (NvidiaCalls, TemperatureCalls, BatteryHealthCalls);
         public Task NvidiaStarted => _nvidiaStarted.Task;
         public Task CancellationObserved => _cancellationObserved.Task;
+        public Task NvidiaCompleted => _nvidiaCompleted.Task;
 
         public async Task<NvidiaTelemetry?> QueryNvidiaAsync(CancellationToken token)
         {
@@ -221,6 +367,7 @@ public sealed class MonitoringServiceTests
                     throw;
                 }
             }
+            _nvidiaCompleted.TrySetResult();
             return new NvidiaTelemetry(10, 50, 25);
         }
 
@@ -233,7 +380,7 @@ public sealed class MonitoringServiceTests
         public Task<BatteryHealthTelemetry> QueryBatteryHealthAsync(CancellationToken token)
         {
             Interlocked.Increment(ref _batteryHealthCalls);
-            return Task.FromResult(new BatteryHealthTelemetry(50_000, 45_000, 90, 100));
+            return Task.FromResult(BatteryHealthResult);
         }
 
         public Task<string> GenerateBatteryReportAsync(

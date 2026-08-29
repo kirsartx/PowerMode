@@ -49,8 +49,25 @@ internal sealed record BatteryHealthTelemetry(
     double? HealthPercent,
     int? CycleCount)
 {
+    public bool HasData =>
+        DesignCapacityMWh is not null ||
+        FullChargeCapacityMWh is not null ||
+        HealthPercent is not null ||
+        CycleCount is not null;
+
     public static BatteryHealthTelemetry Empty { get; } =
         new(null, null, null, null);
+}
+
+internal readonly record struct MonitoringPowerStatus(
+    byte? Percent,
+    BatteryChargeState State,
+    bool? IsOnAcPower,
+    bool IsCritical,
+    TimeSpan? EstimatedRemaining)
+{
+    public static MonitoringPowerStatus Empty { get; } =
+        new(null, BatteryChargeState.Unknown, null, false, null);
 }
 
 internal interface IMonitoringSnapshotSource
