@@ -36,11 +36,14 @@ dist\PowerMode-win-x64.zip   # 可选，由 -CreateZip 生成
 PowerMode-win-x64/
 ├─ 00-START PowerMode.bat    # 启动 App\PowerMode.exe
 ├─ PowerModeSwitcher.bat     # 命令行入口
+├─ PowerMode.Engine.ps1      # 与 GUI 共用的 PowerShell 引擎
 ├─ README.md
 ├─ build-info.json
 └─ App\
    └─ PowerMode.exe          # 自包含主程序与运行库
 ```
+
+启用 `-CreateZip` 时，`dist\PowerMode-win-x64.zip.sha256` 会作为 ZIP 同目录校验文件生成。
 
 请保持目录结构完整，不要单独挪走 `App\PowerMode.exe`。
 
@@ -56,6 +59,10 @@ PowerMode-win-x64/
 # 构建便携版（可选打包 ZIP）
 .\scripts\Publish-Portable.ps1 -Root . -CreateZip
 ```
+
+发布脚本默认先运行 Release/x64 全量测试，再生成自包含便携目录；`-SkipTests`
+仅用于本地诊断，不属于正式构建流程。`build-info.json` 记录版本、提交、构建时间、
+脏工作区状态、运行时和关键文件哈希；ZIP 旁的 `.sha256` 文件用于传输后校验。
 
 命令行菜单（不传参数时交互式）：
 
@@ -99,6 +106,17 @@ PowerMode-win-x64/
 - **重置为默认值**：先安全备份，再将 PowerMode 应用设置写回默认（默认体验为简单模式等）；**历史、备份与遥测数据保留**，**不**批量重置 Windows 电源方案。
 
 关闭 WiFi 的「远程 + 关闭 WiFi」等操作仍可能断开远程会话；使用前请确认有线网络可用。
+
+GUI 的模式应用使用 JSON v1 的结构化结果区分成功、部分成功、失败和需要恢复；
+即使细项同步失败，也会明确显示部分成功并保留恢复入口。配置 JSON 损坏时，应用会
+保留原文件、提示进入恢复中心，并允许从有效备份恢复；模式切换中的
+`last-operation.json` 日志用于启动时发现未完成事务，避免静默覆盖现场。
+
+主窗口按逻辑宽度 720/760/1040 像素切换窄、中、宽布局；窄屏会折叠专业操作，
+状态卡片仍保持可见且可滚动。设置窗口的编辑、导入、删除先作用于工作副本，
+只有点击保存才写入；关闭脏设置时可选择保存、放弃或继续编辑。监控会先按硬件
+能力门控昂贵探测，无 NVIDIA、电池或温度支持时不反复启动对应进程，能力未知时
+最多每五分钟重试一次。
 
 ## 系统要求
 

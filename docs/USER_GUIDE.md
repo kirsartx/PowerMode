@@ -59,7 +59,9 @@ dist\PowerMode-win-x64\
 
 该启动器会启动同目录下的 `App\PowerMode.exe`。请保持整个目录结构，不要只复制 `App\PowerMode.exe`。
 
-可选 ZIP：`dist\PowerMode-win-x64.zip`（发布脚本带 `-CreateZip` 时生成）。
+可选 ZIP：`dist\PowerMode-win-x64.zip`（发布脚本带 `-CreateZip` 时生成），旁边会有
+`dist\PowerMode-win-x64.zip.sha256` 校验文件。便携包内的 `build-info.json` 包含版本、
+提交、UTC 构建时间、运行时、脏工作区状态和关键文件哈希。
 
 ### 源码树兼容入口
 
@@ -86,7 +88,7 @@ PowerMode 使用单实例互斥：重复启动会唤醒已有窗口，不会创�
 
 关屏和睡眠时间按“关屏 / 睡眠”顺序显示，并尽量转换为自然语言（例如关屏 `600s`、睡眠 `0s` 显示为“10 分钟 / 永不”）。
 
-状态刷新通过 `powercfg`、Windows 电池 API、系统性能计数和 `nvidia-smi` 获取。显卡功耗仅用于监控，PowerMode **不会**直接修改 NVIDIA 功耗限制。固件或驱动未暴露的项目会标明“不可用”，而不是把整次刷新一律判失败。
+状态刷新通过 `powercfg`、Windows 电池 API、系统性能计数和 `nvidia-smi` 获取。显卡功耗仅用于监控，PowerMode **不会**直接修改 NVIDIA 功耗限制。固件或驱动未暴露的项目会标明“不可用”，而不是把整次刷新一律判失败。昂贵探测受硬件能力门控：明确不支持时不启动进程，未知能力最多每五分钟重试一次；主窗口与洞察共享最近样本和在途采样。
 
 单次状态刷新设有超时保护；驱动或系统命令异常阻塞时，界面会恢复可操作并提示重试。
 

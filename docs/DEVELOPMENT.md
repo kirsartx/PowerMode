@@ -58,7 +58,7 @@ GUI 通过缓存后的 CLI 脚本执行模式切换与校验，保证与命令�
 | `HardwareCapabilityService` | 探测电池、亮度、NVIDIA、WiFi、温度、通知、热键等能力 |
 | `RecoveryService` | 撤销模式切换、恢复备份、重置默认；带操作闸与审计 |
 | `AutomationEngine` | 规则评估、自动切换、历史写入 |
-| `MonitoringService` | 遥测采样、电池健康缓存、导出相关数据 |
+| `MonitoringService` | 能力门控、非重入遥测采样、电池健康缓存、导出相关数据 |
 | `SystemIntegrationService` | 开机启动、配置备份/恢复、诊断包、可选更新检查（**不下载不安装**） |
 | `SettingsStore` | `%LOCALAPPDATA%\PowerMode\settings.json` 读写与归一化 |
 
@@ -142,6 +142,11 @@ src\PowerMode.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\PowerMode.exe
 .\scripts\Publish-Portable.ps1 -Root . -CreateZip
 ```
 
+正式发布命令不使用 `-SkipTests`：脚本默认先执行 Release/x64 全量测试，并在测试
+失败时立即停止。`-SkipTests` 仅是本地诊断逃生口。发布版本固定为 `1.1.0`，脚本
+会禁用调试符号、拒绝 PDB/测试程序集/中间目录，复制并校验 BAT、PowerShell 引擎
+和 README，生成 `build-info.json` 以及可选 ZIP 的 `.sha256` sidecar。
+
 或：
 
 ```bat
@@ -152,11 +157,11 @@ src\PowerMode.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\PowerMode.exe
 
 1. `dotnet publish` App 项目：`Release`、`win-x64`、`--self-contained true`、`-p:Platform=x64`，输出到暂存目录 `dist\.PowerMode-win-x64.staging\App`。
 2. 将 `PowerModeSwitcher.bat` 与根 `README.md` 复制到暂存根目录（并避免 App 内重复副本干扰）。
-3. 校验 CLI 文件哈希与源一致。
+3. 校验 CLI、PowerShell 引擎和 README 文件哈希与源一致。
 4. 生成 `00-START PowerMode.bat`（`start "" "%~dp0App\PowerMode.exe"`）。
-5. 写入 `build-info.json`（UTC 时间、`App/PowerMode.exe`、`win-x64`、`selfContained`）。
+5. 写入 `build-info.json`（版本、提交、脏状态、UTC 时间、`App/PowerMode.exe`、`win-x64`、`selfContained` 和关键文件哈希）。
 6. 原子替换 `dist\PowerMode-win-x64`（若进程正从该目录运行则失败退出）。
-7. 可选生成 `dist\PowerMode-win-x64.zip`。
+7. 可选生成 `dist\PowerMode-win-x64.zip` 与匹配的 `dist\PowerMode-win-x64.zip.sha256`。
 
 **完整文档（`docs/*`）随源码保留，不会额外塞进便携运行目录**；便携包仅带根 README。
 
@@ -204,6 +209,7 @@ dotnet test .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompila
 dist\PowerMode-win-x64\
 ├─ 00-START PowerMode.bat
 ├─ PowerModeSwitcher.bat
+├─ PowerMode.Engine.ps1
 ├─ README.md
 ├─ build-info.json
 └─ App\
