@@ -8,7 +8,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$rootPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Root).Path).TrimEnd('\')
+$rootPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Root).Path)
+$rootPrefix = if ($rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+    $rootPath
+} else {
+    $rootPath + [System.IO.Path]::DirectorySeparatorChar
+}
 $solution = Join-Path $rootPath "PowerMode.slnx"
 $project = Join-Path $rootPath "src\PowerMode.App\PowerMode.App.csproj"
 $cliSource = Join-Path $rootPath "src\PowerMode.Cli\PowerModeSwitcher.bat"
@@ -22,18 +27,54 @@ $backup = Join-Path $dist ".PowerMode-win-x64.backup"
 $zip = Join-Path $dist "PowerMode-win-x64.zip"
 $zipSidecar = Join-Path $dist "PowerMode-win-x64.zip.sha256"
 $stagingZip = Join-Path $dist ".PowerMode-win-x64.staging.zip"
+$stagingZipSidecar = Join-Path $dist ".PowerMode-win-x64.staging.zip.sha256"
+$zipBackup = Join-Path $dist ".PowerMode-win-x64.zip.backup"
+$zipSidecarBackup = Join-Path $dist ".PowerMode-win-x64.zip.sha256.backup"
 $appOutput = Join-Path $staging "App"
 
 function Assert-WorkspaceChild([string]$Path) {
     $fullPath = [System.IO.Path]::GetFullPath($Path)
-    $prefix = $rootPath + [System.IO.Path]::DirectorySeparatorChar
-    if (-not $fullPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($fullPath -ne $rootPath -and
+        -not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to modify a path outside the workspace: $fullPath"
     }
 }
 
-foreach ($path in @($dist, $output, $staging, $backup, $zip, $zipSidecar, $stagingZip, $appOutput)) {
+function Assert-NoReparsePoint([string]$Path) {
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootItem = Get-Item -LiteralPath $rootPath -Force -ErrorAction Stop
+    if (($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to use a reparse-point workspace root: $rootPath"
+    }
+    $relative = if ($fullPath.Length -gt $rootPath.Length) {
+        $fullPath.Substring($rootPath.Length).TrimStart([char[]]"\/")
+    } else {
+        ''
+    }
+    $current = $rootPath
+    $parts = if ([string]::IsNullOrWhiteSpace($relative)) {
+        @()
+    } else {
+        $relative -split '[\\/]'
+    }
+    foreach ($part in $parts) {
+        if ([string]::IsNullOrWhiteSpace($part)) {
+            continue
+        }
+        $current = Join-Path $current $part
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing to use a reparse-point path inside the workspace: $current"
+            }
+        }
+    }
+}
+
+foreach ($path in @($dist, $output, $staging, $backup, $zip, $zipSidecar,
+        $stagingZip, $stagingZipSidecar, $zipBackup, $zipSidecarBackup, $appOutput)) {
     Assert-WorkspaceChild $path
+    Assert-NoReparsePoint $path
 }
 if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
     throw "Solution not found: $solution"
@@ -56,7 +97,26 @@ if (-not $SkipTests) {
 }
 
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
-foreach ($path in @($staging, $backup, $stagingZip)) {
+if (Test-Path -LiteralPath $backup) {
+    if (Test-Path -LiteralPath $output) {
+        throw "A previous portable publish left both output and backup directories. Review and remove $backup only after confirming $output is complete."
+    } else {
+        Move-Item -LiteralPath $backup -Destination $output
+    }
+}
+if ((Test-Path -LiteralPath $zipBackup) -or (Test-Path -LiteralPath $zipSidecarBackup)) {
+    $hasZipBackup = Test-Path -LiteralPath $zipBackup
+    $hasZipSidecarBackup = Test-Path -LiteralPath $zipSidecarBackup
+    $hasZip = Test-Path -LiteralPath $zip
+    $hasZipSidecar = Test-Path -LiteralPath $zipSidecar
+    if ($hasZipBackup -and $hasZipSidecarBackup -and -not $hasZip -and -not $hasZipSidecar) {
+        Move-Item -LiteralPath $zipBackup -Destination $zip
+        Move-Item -LiteralPath $zipSidecarBackup -Destination $zipSidecar
+    } else {
+        throw "A previous ZIP publish left an incomplete backup state. Review $zip, $zipSidecar, $zipBackup, and $zipSidecarBackup before retrying."
+    }
+}
+foreach ($path in @($staging, $stagingZip, $stagingZipSidecar)) {
     if (Test-Path -LiteralPath $path) {
         Remove-Item -LiteralPath $path -Recurse -Force
     }
@@ -200,18 +260,48 @@ if (Test-Path -LiteralPath $backup) {
 
 if ($CreateZip) {
     Compress-Archive -Path (Join-Path $output '*') -DestinationPath $stagingZip -CompressionLevel Optimal
-    if (Test-Path -LiteralPath $zip) {
-        Remove-Item -LiteralPath $zip -Force
-    }
-    if (Test-Path -LiteralPath $zipSidecar) {
-        Remove-Item -LiteralPath $zipSidecar -Force
-    }
-    Move-Item -LiteralPath $stagingZip -Destination $zip
-    $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+    $zipHash = (Get-FileHash -LiteralPath $stagingZip -Algorithm SHA256).Hash
     [System.IO.File]::WriteAllText(
-        $zipSidecar,
+        $stagingZipSidecar,
         "$zipHash  PowerMode-win-x64.zip$([Environment]::NewLine)",
         [System.Text.UTF8Encoding]::new($false))
+    $hadZip = Test-Path -LiteralPath $zip
+    $hadZipSidecar = Test-Path -LiteralPath $zipSidecar
+    try {
+        if ($hadZip) {
+            Move-Item -LiteralPath $zip -Destination $zipBackup
+        }
+        if ($hadZipSidecar) {
+            Move-Item -LiteralPath $zipSidecar -Destination $zipSidecarBackup
+        }
+        Move-Item -LiteralPath $stagingZip -Destination $zip
+        Move-Item -LiteralPath $stagingZipSidecar -Destination $zipSidecar
+        $installedZipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        if ($installedZipHash -ne $zipHash) {
+            throw "Installed portable archive failed its SHA-256 integrity check."
+        }
+    }
+    catch {
+        if (Test-Path -LiteralPath $zip) {
+            Remove-Item -LiteralPath $zip -Force
+        }
+        if (Test-Path -LiteralPath $zipSidecar) {
+            Remove-Item -LiteralPath $zipSidecar -Force
+        }
+        if ($hadZip -and (Test-Path -LiteralPath $zipBackup)) {
+            Move-Item -LiteralPath $zipBackup -Destination $zip
+        }
+        if ($hadZipSidecar -and (Test-Path -LiteralPath $zipSidecarBackup)) {
+            Move-Item -LiteralPath $zipSidecarBackup -Destination $zipSidecar
+        }
+        throw
+    }
+    if (Test-Path -LiteralPath $zipBackup) {
+        Remove-Item -LiteralPath $zipBackup -Force
+    }
+    if (Test-Path -LiteralPath $zipSidecarBackup) {
+        Remove-Item -LiteralPath $zipSidecarBackup -Force
+    }
 }
 
 Write-Host "PowerMode portable build: $output"

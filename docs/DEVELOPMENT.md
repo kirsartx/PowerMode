@@ -156,7 +156,7 @@ src\PowerMode.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\PowerMode.exe
 脚本行为摘要：
 
 1. `dotnet publish` App 项目：`Release`、`win-x64`、`--self-contained true`、`-p:Platform=x64`，输出到暂存目录 `dist\.PowerMode-win-x64.staging\App`。
-2. 将 `PowerModeSwitcher.bat` 与根 `README.md` 复制到暂存根目录（并避免 App 内重复副本干扰）。
+2. 将 `PowerModeSwitcher.bat`、`PowerMode.Engine.ps1` 与根 `README.md` 复制到暂存根目录（并避免 App 内重复副本干扰）。
 3. 校验 CLI、PowerShell 引擎和 README 文件哈希与源一致。
 4. 生成 `00-START PowerMode.bat`（`start "" "%~dp0App\PowerMode.exe"`）。
 5. 写入 `build-info.json`（版本、提交、脏状态、UTC 时间、`App/PowerMode.exe`、`win-x64`、`selfContained` 和关键文件哈希）。
@@ -218,7 +218,7 @@ dist\PowerMode-win-x64\
 
 兼容性约定：
 
-- 根目录只放启动入口、CLI 与 README；运行库在 `App\`。
+- 根目录只放启动入口、CLI、PowerShell 引擎与 README；运行库在 `App\`。
 - 不要把 `App\PowerMode.exe` 单独拷走作为“绿色版”。
 - 发布中若 `PowerMode` 进程路径位于输出目录下，脚本会拒绝覆盖。
 
