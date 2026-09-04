@@ -199,9 +199,12 @@ dotnet test .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompila
 | `RecoveryCenterPresentationTests` | 恢复中心呈现与自动化名 |
 | `SettingsCompatibilityTests` | 配置归一化与兼容 |
 | `FluentAccessibilityPresentationTests` | Fluent / a11y 相关静态约定 |
+| `RefreshInteractionPresentationTests` | Refresh 按钮、F5 路由与只读无障碍契约 |
 | `WindowsCapabilityProbeResultTests` | 探测结果模型 |
 
 优先把可单测逻辑放在 `Services` 纯函数与策略中；UI 代码通过 InternalsVisibleTo 暴露必要内部类型给测试。
+
+`RefreshInteractionPresentationTests` 解析主窗口 XAML 和事件路由源码，确保 Refresh 同时有可见按钮与控件级 `F5` 入口、只处理一次，并持续调用只读状态读取流程。它不启动真实窗口，也不执行电源写入命令。桌面自动化中的“无法激活已捕获窗口”属于前台窗口/输入注入环境限制，应单独记录，不能替代应用层契约验证。
 
 ## 便携包装布局
 

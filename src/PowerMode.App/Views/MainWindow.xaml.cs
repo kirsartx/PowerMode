@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Win32;
 using System.Globalization;
@@ -430,6 +431,7 @@ public sealed partial class MainWindow : Window
         LogTitle.Text=T("Log"); LogHintText.Text=T("LogHint"); AutoScrollText.Text=T("AutoScroll"); CopyLogText.Text=T("Copy"); ClearLogText.Text=T("Clear"); StatusText.Text=T("Ready"); CliPathText.Text=string.Format(T("CliPath"),_cliPath); UpdateLogStats();
         LogBox.FontFamily=new FontFamily(_language=="zh"?"Microsoft YaHei UI":"Cascadia Mono");
         LogBox.FontSize=_language=="zh"?13.5:14;
+        AutomationProperties.SetHelpText(RefreshButton, _language == "zh" ? "重新读取状态（只读，F5）" : "Reload status (read-only, F5)");
         ToolTipService.SetToolTip(RefreshButton, _language == "zh" ? "重新读取状态（F5）" : "Reload status (F5)");
         ToolTipService.SetToolTip(AutoQuickToggle,_language=="zh"?"根据电源和运行程序自动切换":"Switch automatically based on power and running apps");
         ToolTipService.SetToolTip(LiveQuickToggle,_language=="zh"?"定时刷新硬件与电源状态":"Refresh hardware and power status periodically");
@@ -844,6 +846,11 @@ public sealed partial class MainWindow : Window
     }
 
     private async void RefreshButton_Click(object sender,RoutedEventArgs e)=>await RefreshStatusAsync();
+    private async void RefreshKeyboardAccelerator_Invoked(KeyboardAccelerator sender,KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled=true;
+        await RefreshStatusAsync();
+    }
     private async void RemoteButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("remote");
     private async void SaverButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("saver");
     private async void BalancedButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("balanced");

@@ -38,7 +38,12 @@
                 <StackPanel x:Name="ProfessionalQuickActions" Orientation="Horizontal" Spacing="8">
                     <ToggleButton x:Name="AutoQuickToggle" Click="AutoQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE945;"/><TextBlock x:Name="AutoQuickText"/></StackPanel></ToggleButton>
                     <ToggleButton x:Name="LiveQuickToggle" Click="LiveQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D9;"/><TextBlock x:Name="LiveQuickText"/></StackPanel></ToggleButton>
-                    <Button x:Name="RefreshButton" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;"/><ProgressRing x:Name="RefreshProgressRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="RefreshButtonText"/></StackPanel></Button>
+                    <Button x:Name="RefreshButton" IsTabStop="True" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click">
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="F5" Invoked="RefreshKeyboardAccelerator_Invoked"/>
+                        </Button.KeyboardAccelerators>
+                        <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;"/><ProgressRing x:Name="RefreshProgressRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="RefreshButtonText"/></StackPanel>
+                    </Button>
                     <Button x:Name="FeaturesButton" Click="FeaturesButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE713;"/><TextBlock x:Name="FeaturesButtonText"/></StackPanel></Button>
                     <Button x:Name="InsightsButton" Click="InsightsButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D2;"/><TextBlock x:Name="InsightsButtonText"/></StackPanel></Button>
                 </StackPanel>
