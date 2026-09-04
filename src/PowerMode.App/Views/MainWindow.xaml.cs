@@ -34,6 +34,7 @@ public sealed partial class MainWindow : Window
     private ModeSwitchPresentationAction _statusAction;
     private bool _persistentModeSwitchPresentation;
     private string _activeModeKey = "unknown";
+    private int _refreshInProgress;
 
     private readonly Dictionary<string, Dictionary<string, string>> _texts = new()
     {
@@ -585,11 +586,16 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshStatusAsync()
     {
-        if (_modeSwitchInProgress)
+        if (_modeSwitchInProgress || Interlocked.CompareExchange(ref _refreshInProgress, 1, 0) != 0)
             return;
-        RefreshIcon.Visibility=Visibility.Collapsed;RefreshProgressRing.Visibility=Visibility.Visible;RefreshProgressRing.IsActive=true;
+
+        var refreshButtonWasEnabled = RefreshButton.IsEnabled;
+        var refreshKeyboardAcceleratorWasEnabled = RefreshKeyboardAccelerator.IsEnabled;
         try
         {
+            RefreshButton.IsEnabled=false;
+            RefreshKeyboardAccelerator.IsEnabled=false;
+            RefreshIcon.Visibility=Visibility.Collapsed;RefreshProgressRing.Visibility=Visibility.Visible;RefreshProgressRing.IsActive=true;
             var result = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
             AppendBackendDiagnostics(result.Operation);
             if (result.State is null)
@@ -630,6 +636,9 @@ public sealed partial class MainWindow : Window
         finally
         {
             RefreshProgressRing.IsActive=false;RefreshProgressRing.Visibility=Visibility.Collapsed;RefreshIcon.Visibility=Visibility.Visible;
+            RefreshKeyboardAccelerator.IsEnabled=refreshKeyboardAcceleratorWasEnabled;
+            RefreshButton.IsEnabled=refreshButtonWasEnabled;
+            Volatile.Write(ref _refreshInProgress,0);
         }
     }
 

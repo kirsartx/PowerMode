@@ -40,7 +40,7 @@
                     <ToggleButton x:Name="LiveQuickToggle" Click="LiveQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D9;"/><TextBlock x:Name="LiveQuickText"/></StackPanel></ToggleButton>
                     <Button x:Name="RefreshButton" IsTabStop="True" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click">
                         <Button.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="F5" Invoked="RefreshKeyboardAccelerator_Invoked"/>
+                            <KeyboardAccelerator x:Name="RefreshKeyboardAccelerator" Key="F5" Invoked="RefreshKeyboardAccelerator_Invoked"/>
                         </Button.KeyboardAccelerators>
                         <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;"/><ProgressRing x:Name="RefreshProgressRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="RefreshButtonText"/></StackPanel>
                     </Button>

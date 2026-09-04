@@ -31,8 +31,9 @@ public sealed class RefreshInteractionPresentationTests
     [Fact]
     public void RefreshRoute_HandlesKeyboardActivationOnceAndDescribesReadOnlyAction()
     {
-        var mainWindow = Minify(File.ReadAllText(FindRepositoryFile(
-            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs")));
+        var mainWindowSource = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs"));
+        var mainWindow = Minify(mainWindowSource);
         var featureWindow = Minify(File.ReadAllText(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.Features.cs")));
 
@@ -46,6 +47,37 @@ public sealed class RefreshInteractionPresentationTests
         Assert.DoesNotContain("e.Key==VirtualKey.F5", featureWindow);
         Assert.Contains("VirtualKey.Number1", featureWindow);
         Assert.Contains("VirtualKey.Number4", featureWindow);
+
+        var acceleratorHandler = Minify(MethodBody(
+            mainWindowSource,
+            "private async void RefreshKeyboardAccelerator_Invoked"));
+        Assert.Contains("args.Handled=true", acceleratorHandler);
+        Assert.Contains("awaitRefreshStatusAsync()", acceleratorHandler);
+        Assert.DoesNotContain("RunModeAsync", acceleratorHandler);
+
+        var refreshMethod = Minify(MethodBody(
+            mainWindowSource,
+            "private async Task RefreshStatusAsync"));
+        Assert.Contains("ReadStateAsync", refreshMethod);
+        Assert.DoesNotContain("RunModeAsync", refreshMethod);
+        Assert.DoesNotContain("TrySwitchAsync", refreshMethod);
+    }
+
+    [Fact]
+    public void RefreshStatus_UsesAtomicGateAndRestoresButtonPresentation()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.xaml.cs"));
+        var refreshMethod = Minify(MethodBody(source, "private async Task RefreshStatusAsync"));
+
+        Assert.Contains("Interlocked.CompareExchange(ref_refreshInProgress,1,0)", refreshMethod);
+        Assert.Contains("RefreshButton.IsEnabled=false", refreshMethod);
+        Assert.Contains("RefreshKeyboardAccelerator.IsEnabled=false", refreshMethod);
+        Assert.Contains("finally", refreshMethod);
+        Assert.Contains("RefreshButton.IsEnabled=refreshButtonWasEnabled", refreshMethod);
+        Assert.Contains(
+            "RefreshKeyboardAccelerator.IsEnabled=refreshKeyboardAcceleratorWasEnabled",
+            refreshMethod);
     }
 
     private static XElement NamedElement(XDocument document, string name) =>
@@ -66,6 +98,26 @@ public sealed class RefreshInteractionPresentationTests
 
     private static string Minify(string source) =>
         System.Text.RegularExpressions.Regex.Replace(source, @"\s+", string.Empty);
+
+    private static string MethodBody(string source, string methodName)
+    {
+        var methodStart = source.IndexOf(methodName, StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, $"Could not find method {methodName}.");
+
+        var bodyStart = source.IndexOf('{', methodStart);
+        Assert.True(bodyStart >= 0, $"Could not find body for method {methodName}.");
+
+        var depth = 0;
+        for (var index = bodyStart; index < source.Length; index++)
+        {
+            if (source[index] == '{')
+                depth++;
+            else if (source[index] == '}' && --depth == 0)
+                return source[bodyStart..(index + 1)];
+        }
+
+        throw new InvalidOperationException($"Could not close body for method {methodName}.");
+    }
 
     private static string FindRepositoryFile(params string[] path)
     {
