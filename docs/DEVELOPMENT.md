@@ -204,7 +204,7 @@ dotnet test .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompila
 
 优先把可单测逻辑放在 `Services` 纯函数与策略中；UI 代码通过 InternalsVisibleTo 暴露必要内部类型给测试。
 
-`RefreshInteractionPresentationTests` 解析主窗口 XAML 和事件路由源码，确保 Refresh 同时有可见按钮与控件级 `F5` 入口、只处理一次，并持续调用只读状态读取流程。它不启动真实窗口，也不执行电源写入命令。桌面自动化中的“无法激活已捕获窗口”属于前台窗口/输入注入环境限制，应单独记录，不能替代应用层契约验证。
+`RefreshInteractionPresentationTests` 解析主窗口 XAML 和事件路由源码，确保 Refresh 同时有可见按钮与唯一的控件级 `F5` 入口、加速器处理器只调用一次刷新，并检查当前刷新方法只调用 `ReadStateAsync` 且不调用已知的模式切换/恢复 API。它不启动真实窗口，也不执行电源写入命令。桌面自动化中的“无法激活已捕获窗口”属于前台窗口/输入注入环境限制，应单独记录，不能替代应用层契约验证。
 
 ## 便携包装布局
 

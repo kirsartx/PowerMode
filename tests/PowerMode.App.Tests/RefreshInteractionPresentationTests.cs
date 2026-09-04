@@ -19,6 +19,11 @@ public sealed class RefreshInteractionPresentationTests
         Assert.Equal("RefreshButton_Click", AttributeValue(refreshButton, "Click"));
         Assert.Equal("F5", AutomationAttribute(refreshButton, "AcceleratorKey"));
 
+        Assert.Equal(
+            1,
+            document.Descendants().Count(element =>
+                element.Name.LocalName == "KeyboardAccelerator"
+                && string.Equals(AttributeValue(element, "Key"), "F5", StringComparison.Ordinal)));
         var accelerator = Assert.Single(
             refreshButton.Descendants(),
             element => element.Name.LocalName == "KeyboardAccelerator");
@@ -53,14 +58,25 @@ public sealed class RefreshInteractionPresentationTests
             "private async void RefreshKeyboardAccelerator_Invoked"));
         Assert.Contains("args.Handled=true", acceleratorHandler);
         Assert.Contains("awaitRefreshStatusAsync()", acceleratorHandler);
+        Assert.Equal(1, CountOccurrences(acceleratorHandler, "RefreshStatusAsync("));
         Assert.DoesNotContain("RunModeAsync", acceleratorHandler);
 
         var refreshMethod = Minify(MethodBody(
             mainWindowSource,
             "private async Task RefreshStatusAsync"));
         Assert.Contains("ReadStateAsync", refreshMethod);
-        Assert.DoesNotContain("RunModeAsync", refreshMethod);
-        Assert.DoesNotContain("TrySwitchAsync", refreshMethod);
+        Assert.Equal(1, CountOccurrences(refreshMethod, "ReadStateAsync("));
+        foreach (var mutationCall in new[]
+                 {
+                     "RunModeAsync(",
+                     "TrySwitchAsync(",
+                     "ApplyAsync(",
+                     "RestoreAsync(",
+                     "SetActive("
+                 })
+        {
+            Assert.DoesNotContain(mutationCall, refreshMethod);
+        }
     }
 
     [Fact]
@@ -98,6 +114,14 @@ public sealed class RefreshInteractionPresentationTests
 
     private static string Minify(string source) =>
         System.Text.RegularExpressions.Regex.Replace(source, @"\s+", string.Empty);
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        for (var index = 0; (index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0; index += value.Length)
+            count++;
+        return count;
+    }
 
     private static string MethodBody(string source, string methodName)
     {
