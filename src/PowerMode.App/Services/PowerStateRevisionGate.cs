@@ -9,6 +9,8 @@ internal sealed class PowerStateRevisionGate
 
     public long Capture() => Volatile.Read(ref _revision);
 
+    public long BeginRead() => Interlocked.Increment(ref _revision);
+
     public long BeginMutation()
     {
         Interlocked.Increment(ref _activeMutations);

@@ -333,60 +333,74 @@ public sealed partial class MainWindow
     }
     internal async Task VerifyWithSummaryAsync()
     {
-        var availability = await GetRecoveryService().GetLastOperationAvailabilityAsync();
-        if (!string.IsNullOrWhiteSpace(availability.Error))
-        {
-            PresentStartupRecovery(new(
-                true,
-                null,
-                null,
-                availability.Error));
-            return;
-        }
-        if (availability.Record is { } record)
-        {
-            var verificationRevision = _powerStateRevisionGate.Capture();
-            var result = await VerifyLastOperationAsync(
-                record.OperationId,
-                CancellationToken.None);
-            if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
-                return;
-            if (result.CurrentState is { } currentState &&
-                _powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
-                ApplyPowerModeState(currentState);
-            StatusText.Text = result.Error ?? (result.MatchesCriticalExpectations
-                ? (IsChinese ? "最近电源操作已验证。" : "The last power operation is verified.")
-                : (IsChinese ? "当前状态与关键预期不匹配。" : "Current state does not match critical expectations."));
-            StatusBar.Severity = result.MatchesCriticalExpectations
-                ? InfoBarSeverity.Success
-                : InfoBarSeverity.Warning;
-            StatusBar.IsOpen = true;
-            return;
-        }
-
-        if (_modeSwitchInProgress ||
-            _powerStateRevisionGate.MutationInProgress ||
-            Interlocked.CompareExchange(ref _refreshInProgress, 1, 0) != 0)
-            return;
+        var verificationRevision = _powerStateRevisionGate.BeginRead();
+        var verificationReadGateEntered = false;
         try
         {
-            var fallbackRevision = _powerStateRevisionGate.Capture();
+            var availability = await GetRecoveryService().GetLastOperationAvailabilityAsync();
+            if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
+                return;
+            if (!string.IsNullOrWhiteSpace(availability.Error))
+            {
+                PresentStartupRecovery(new(
+                    true,
+                    null,
+                    null,
+                    availability.Error));
+                return;
+            }
+            if (availability.Record is { } record)
+            {
+                var result = await VerifyLastOperationAsync(
+                    record.OperationId,
+                    CancellationToken.None,
+                    verificationRevision);
+                if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
+                    return;
+                if (result.CurrentState is { } currentState)
+                    ApplyPowerModeState(currentState);
+                StatusText.Text = result.Error ?? (result.MatchesCriticalExpectations
+                    ? (IsChinese ? "最近电源操作已验证。" : "The last power operation is verified.")
+                    : (IsChinese ? "当前状态与关键预期不匹配。" : "Current state does not match critical expectations."));
+                StatusBar.Severity = result.MatchesCriticalExpectations
+                    ? InfoBarSeverity.Success
+                    : InfoBarSeverity.Warning;
+                StatusBar.IsOpen = true;
+                return;
+            }
+
+            if (_modeSwitchInProgress ||
+                _powerStateRevisionGate.MutationInProgress ||
+                Interlocked.CompareExchange(ref _refreshInProgress, 1, 0) != 0)
+                return;
+            verificationReadGateEntered = true;
             var current = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
-            if (!_powerStateRevisionGate.CanApply(fallbackRevision, _modeSwitchInProgress))
+            if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
                 return;
             AppendBackendDiagnostics(current.Operation);
             if (current.State is { } state)
                 ApplyPowerModeState(state);
             StatusText.Text = current.State is null
                 ? (IsChinese ? "无法可靠验证当前状态。" : "The current state could not be verified reliably.")
-                : (IsChinese ? "当前电源状态可读取且契约有效。" : "The current power state is readable and contract-valid.");
+                : (IsChinese ? "当前电源状态可读取且契约有效。" : "The current state is readable and contract-valid.");
             StatusBar.Severity = current.State is null
                 ? InfoBarSeverity.Error
                 : InfoBarSeverity.Success;
+            StatusBar.IsOpen = true;
+        }
+        catch (Exception exception)
+        {
+            if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
+                return;
+            AppendLog($"Verify: {exception.Message}");
+            StatusText.Text = exception.Message;
+            StatusBar.Severity = InfoBarSeverity.Error;
+            StatusBar.IsOpen = true;
         }
         finally
         {
-            Volatile.Write(ref _refreshInProgress, 0);
+            if (verificationReadGateEntered)
+                Volatile.Write(ref _refreshInProgress, 0);
         }
     }
     private async void RepairButton_Click(object sender,RoutedEventArgs e)

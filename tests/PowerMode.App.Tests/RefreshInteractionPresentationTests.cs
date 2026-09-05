@@ -79,7 +79,7 @@ public sealed class RefreshInteractionPresentationTests
         }
 
         Assert.Contains(
-            "varrefreshRevision=_powerStateRevisionGate.Capture()",
+            "varrefreshRevision=_powerStateRevisionGate.BeginRead()",
             refreshMethod);
         Assert.Contains(
             "if(_modeSwitchInProgress||_powerStateRevisionGate.MutationInProgress||Interlocked.CompareExchange(ref_refreshInProgress,1,0)!=0)return",
@@ -144,6 +144,12 @@ public sealed class RefreshInteractionPresentationTests
         var verifyMethod = Minify(MethodBody(
             mutationSource,
             "internal async Task<LastOperationVerificationResult> VerifyLastOperationAsync"));
+        Assert.Contains(
+            "varverificationRevision=expectedRevision??_powerStateRevisionGate.BeginRead()",
+            verifyMethod);
+        Assert.Contains(
+            "if(!_powerStateRevisionGate.CanApply(verificationRevision,_modeSwitchInProgress))returnresult",
+            verifyMethod);
         Assert.Contains("ResumeStartupAfterRecoveryAsync(cancellationToken)", verifyMethod);
 
         var verifySummaryMethod = Minify(MethodBody(
@@ -156,7 +162,7 @@ public sealed class RefreshInteractionPresentationTests
             "ApplyPowerModeState(currentState)",
             verifySummaryMethod);
         Assert.Contains(
-            "varverificationRevision=_powerStateRevisionGate.Capture()",
+            "varverificationRevision=_powerStateRevisionGate.BeginRead()",
             verifySummaryMethod);
         var verificationCheck = verifySummaryMethod.IndexOf(
             "CanApply(verificationRevision,_modeSwitchInProgress)",
@@ -171,7 +177,7 @@ public sealed class RefreshInteractionPresentationTests
             "varcurrent=await_powerModeBackend.ReadStateAsync(",
             StringComparison.Ordinal);
         var noJournalCheck = verifySummaryMethod.IndexOf(
-            "CanApply(fallbackRevision,_modeSwitchInProgress)",
+            "CanApply(verificationRevision,_modeSwitchInProgress)",
             noJournalRead,
             StringComparison.Ordinal);
         Assert.True(noJournalRead >= 0 && noJournalCheck > noJournalRead);

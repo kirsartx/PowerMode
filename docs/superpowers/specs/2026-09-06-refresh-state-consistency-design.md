@@ -21,11 +21,12 @@
 新增 `PowerStateRevisionGate`：
 
 - `Capture()` 返回当前版本；
+- `BeginRead()` 原子推进版本并返回本次读观察版本，使后启动的读操作淘汰更早读操作；
 - `BeginMutation()` 原子递增版本并标记一个活动 mutation；
 - `EndMutation()` 结束一个活动 mutation，支持嵌套生命周期；
 - `CanApply(capturedRevision, mutationInProgress)` 仅在没有进行中的 mutation、没有进行中的模式切换且捕获版本仍是当前版本时返回 `true`。
 
-`RefreshStatusAsync` 在调用 `ReadStateAsync` 前捕获版本；读取完成后，在任何 `ApplyPowerModeState` 或刷新成功/失败摘要写入前调用 `CanApply`。版本失效时直接结束本次刷新，让 `finally` 清理进度指示器和门控状态。
+`RefreshStatusAsync` 在调用 `ReadStateAsync` 前开始一次读观察；读取完成后，在任何 `ApplyPowerModeState` 或刷新成功/失败摘要写入前调用 `CanApply`。验证流程也使用同一读观察版本，并在日志可用性、状态卡片、InfoBar 和异常摘要写入前检查版本。版本失效时直接结束本次操作，让 `finally` 清理进度指示器和门控状态。
 
 模式事务在设置 `_modeSwitchInProgress = true` 的同一位置调用 `BeginMutation()`，并在 `finally` 中结束 mutation；恢复中心的实际恢复、退出时的启动快照恢复也覆盖同一生命周期。这样所有经过统一模式事务入口的预设、自定义、自动化和恢复操作都会使在途刷新失效，且 mutation 等待期间不会启动新的刷新。
 

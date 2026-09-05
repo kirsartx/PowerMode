@@ -121,6 +121,7 @@ git commit -m "test: add power state revision gate"
 **Interfaces:**
 - `MainWindow` owns one `PowerStateRevisionGate` for the lifetime of the window.
 - Refresh captures `long refreshRevision` before awaiting the backend.
+- Every state/verification read starts with `BeginRead()` so a newer read invalidates an older in-flight observation.
 - Mode transaction calls `_powerStateRevisionGate.BeginMutation()` immediately before setting `_modeSwitchInProgress = true`.
 - Recovery and exit snapshot restoration call `BeginMutation()` before awaiting their write operation and `EndMutation()` in `finally`.
 

@@ -180,13 +180,17 @@ public sealed partial class MainWindow
 
     internal async Task<LastOperationVerificationResult> VerifyLastOperationAsync(
         Guid operationId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long? expectedRevision = null)
     {
+        var verificationRevision = expectedRevision ?? _powerStateRevisionGate.BeginRead();
         var result = await GetRecoveryService().VerifyLastOperationAsync(
             operationId,
             cancellationToken);
         if (result.MatchesCriticalExpectations)
         {
+            if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
+                return result;
             ClearPersistentRecoveryPresentation();
             await ResumeStartupAfterRecoveryAsync(cancellationToken);
         }

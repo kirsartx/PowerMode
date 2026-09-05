@@ -594,7 +594,7 @@ public sealed partial class MainWindow : Window
 
         var refreshButtonWasEnabled = RefreshButton.IsEnabled;
         var refreshKeyboardAcceleratorWasEnabled = RefreshKeyboardAccelerator.IsEnabled;
-        var refreshRevision = _powerStateRevisionGate.Capture();
+            var refreshRevision = _powerStateRevisionGate.BeginRead();
         try
         {
             RefreshButton.IsEnabled=false;
@@ -874,20 +874,7 @@ public sealed partial class MainWindow : Window
     private async void HighButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("high");
     private async void RemoteCustomButton_Click(object sender,RoutedEventArgs e)=>await RunModeAsync("remote",((int)CpuBox.Value).ToString());
     private async void RemoteNoWifiButton_Click(object sender,RoutedEventArgs e){if(await ConfirmAsync(T("ConfirmNoWifiTitle"),T("ConfirmNoWifi")))await RunModeAsync("remote",((int)CpuBox.Value).ToString(),"nowifi");}
-    private async void VerifyButton_Click(object sender,RoutedEventArgs e)
-    {
-        try
-        {
-            await VerifyWithSummaryAsync();
-        }
-        catch (Exception exception)
-        {
-            AppendLog($"Verify: {exception.Message}");
-            StatusText.Text = exception.Message;
-            StatusBar.Severity = InfoBarSeverity.Error;
-            StatusBar.IsOpen = true;
-        }
-    }
+    private async void VerifyButton_Click(object sender,RoutedEventArgs e)=>await VerifyWithSummaryAsync();
     private async void LanguageButton_Click(object sender,RoutedEventArgs e)
     {
         var next=_language=="zh"?"en":"zh";

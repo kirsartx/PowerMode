@@ -25,6 +25,17 @@ public sealed class PowerStateRevisionGateTests
     }
 
     [Fact]
+    public void BeginningNewReadInvalidatesAnOlderRead()
+    {
+        var gate = new PowerStateRevisionGate();
+        var captured = gate.BeginRead();
+
+        gate.BeginRead();
+
+        Assert.False(gate.CanApply(captured, mutationInProgress: false));
+    }
+
+    [Fact]
     public void NewRevisionCanBeAppliedAfterMutation()
     {
         var gate = new PowerStateRevisionGate();
