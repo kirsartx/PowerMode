@@ -566,6 +566,7 @@ public sealed partial class MainWindow
             }
         }
 
+        _powerStateRevisionGate.BeginMutation();
         _modeSwitchInProgress = true;
         RenderRecommendation();
         BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;

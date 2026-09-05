@@ -35,6 +35,7 @@ public sealed partial class MainWindow : Window
     private bool _persistentModeSwitchPresentation;
     private string _activeModeKey = "unknown";
     private int _refreshInProgress;
+    private readonly PowerStateRevisionGate _powerStateRevisionGate = new();
 
     private readonly Dictionary<string, Dictionary<string, string>> _texts = new()
     {
@@ -591,12 +592,15 @@ public sealed partial class MainWindow : Window
 
         var refreshButtonWasEnabled = RefreshButton.IsEnabled;
         var refreshKeyboardAcceleratorWasEnabled = RefreshKeyboardAccelerator.IsEnabled;
+        var refreshRevision = _powerStateRevisionGate.Capture();
         try
         {
             RefreshButton.IsEnabled=false;
             RefreshKeyboardAccelerator.IsEnabled=false;
             RefreshIcon.Visibility=Visibility.Collapsed;RefreshProgressRing.Visibility=Visibility.Visible;RefreshProgressRing.IsActive=true;
             var result = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
+            if (!_powerStateRevisionGate.CanApply(refreshRevision, _modeSwitchInProgress))
+                return;
             AppendBackendDiagnostics(result.Operation);
             if (result.State is null)
             {

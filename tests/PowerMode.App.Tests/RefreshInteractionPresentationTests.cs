@@ -77,6 +77,26 @@ public sealed class RefreshInteractionPresentationTests
         {
             Assert.DoesNotContain(mutationCall, refreshMethod);
         }
+
+        Assert.Contains(
+            "varrefreshRevision=_powerStateRevisionGate.Capture()",
+            refreshMethod);
+        Assert.Contains(
+            "if(!_powerStateRevisionGate.CanApply(refreshRevision,_modeSwitchInProgress))return",
+            refreshMethod);
+
+        var mutationSource = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
+        var mutationMethod = Minify(MethodBody(
+            mutationSource,
+            "private async Task<bool> RunTargetAfterStartupAsync"));
+        var beginMutation = mutationMethod.IndexOf(
+            "_powerStateRevisionGate.BeginMutation()",
+            StringComparison.Ordinal);
+        var setMutationFlag = mutationMethod.IndexOf(
+            "_modeSwitchInProgress=true",
+            StringComparison.Ordinal);
+        Assert.True(beginMutation >= 0 && beginMutation < setMutationFlag);
     }
 
     [Fact]
