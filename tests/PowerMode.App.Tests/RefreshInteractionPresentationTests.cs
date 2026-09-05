@@ -155,6 +155,21 @@ public sealed class RefreshInteractionPresentationTests
         Assert.Contains(
             "ApplyPowerModeState(currentState)",
             verifySummaryMethod);
+        Assert.Contains(
+            "varverificationRevision=_powerStateRevisionGate.Capture()",
+            verifySummaryMethod);
+
+        var noJournalRead = verifySummaryMethod.IndexOf(
+            "varcurrent=await_powerModeBackend.ReadStateAsync(",
+            StringComparison.Ordinal);
+        var noJournalCheck = verifySummaryMethod.IndexOf(
+            "CanApply(fallbackRevision,_modeSwitchInProgress)",
+            noJournalRead,
+            StringComparison.Ordinal);
+        Assert.True(noJournalRead >= 0 && noJournalCheck > noJournalRead);
+
+        Assert.Contains("varmutationStarted=false", mutationMethod);
+        Assert.Contains("if(mutationStarted)_powerStateRevisionGate.EndMutation()", mutationMethod);
     }
 
     [Fact]

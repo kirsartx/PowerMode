@@ -578,17 +578,19 @@ public sealed partial class MainWindow
             }
         }
 
-        _powerStateRevisionGate.BeginMutation();
-        _modeSwitchInProgress = true;
-        RenderRecommendation();
-        BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
-        StatusText.Text = IsChinese
-            ? $"正在切换到“{GetModeDisplayName(targetMode)}”…"
-            : $"Switching to “{GetModeDisplayName(targetMode)}”…";
-        StatusBar.Severity = InfoBarSeverity.Informational;
-
+        var mutationStarted = false;
         try
         {
+            _powerStateRevisionGate.BeginMutation();
+            mutationStarted = true;
+            _modeSwitchInProgress = true;
+            RenderRecommendation();
+            BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+            StatusText.Text = IsChinese
+                ? $"正在切换到“{GetModeDisplayName(targetMode)}”…"
+                : $"Switching to “{GetModeDisplayName(targetMode)}”…";
+            StatusBar.Severity = InfoBarSeverity.Informational;
+
             var result = await _modeSwitchCoordinator.TrySwitchAsync(new ModeSwitchRequest(
                 Guid.NewGuid(),
                 target,
@@ -659,7 +661,8 @@ public sealed partial class MainWindow
         {
             _pendingMode = null;
             _modeSwitchInProgress = false;
-            _powerStateRevisionGate.EndMutation();
+            if (mutationStarted)
+                _powerStateRevisionGate.EndMutation();
             BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             RenderRecommendation();
         }

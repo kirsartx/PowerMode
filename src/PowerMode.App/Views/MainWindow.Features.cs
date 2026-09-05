@@ -359,7 +359,12 @@ public sealed partial class MainWindow
             return;
         }
 
+        if (_modeSwitchInProgress || _powerStateRevisionGate.MutationInProgress)
+            return;
+        var fallbackRevision = _powerStateRevisionGate.Capture();
         var current = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
+        if (!_powerStateRevisionGate.CanApply(fallbackRevision, _modeSwitchInProgress))
+            return;
         AppendBackendDiagnostics(current.Operation);
         if (current.State is { } state)
             ApplyPowerModeState(state);
