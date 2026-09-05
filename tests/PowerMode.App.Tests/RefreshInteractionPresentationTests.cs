@@ -84,6 +84,17 @@ public sealed class RefreshInteractionPresentationTests
         Assert.Contains(
             "if(!_powerStateRevisionGate.CanApply(refreshRevision,_modeSwitchInProgress))return",
             refreshMethod);
+        Assert.Contains(
+            "catch(Exceptionexception){if(!_powerStateRevisionGate.CanApply(refreshRevision,_modeSwitchInProgress))return",
+            refreshMethod);
+
+        var readStateCall = refreshMethod.IndexOf(
+            "ReadStateAsync(",
+            StringComparison.Ordinal);
+        var applyRevisionCheck = refreshMethod.IndexOf(
+            "CanApply(refreshRevision,_modeSwitchInProgress)",
+            StringComparison.Ordinal);
+        Assert.True(readStateCall >= 0 && applyRevisionCheck > readStateCall);
 
         var mutationSource = File.ReadAllText(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
@@ -97,6 +108,19 @@ public sealed class RefreshInteractionPresentationTests
             "_modeSwitchInProgress=true",
             StringComparison.Ordinal);
         Assert.True(beginMutation >= 0 && beginMutation < setMutationFlag);
+
+        var recoverySource = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
+        var recoveryMethod = Minify(MethodBody(
+            recoverySource,
+            "internal async Task<RecoveryActionResult> RestoreBeforeStateAsync"));
+        var recoveryMutation = recoveryMethod.IndexOf(
+            "_powerStateRevisionGate.BeginMutation()",
+            StringComparison.Ordinal);
+        var restoreCall = recoveryMethod.IndexOf(
+            "GetRecoveryService().RestoreBeforeStateAsync(",
+            StringComparison.Ordinal);
+        Assert.True(recoveryMutation >= 0 && recoveryMutation < restoreCall);
     }
 
     [Fact]

@@ -197,6 +197,7 @@ public sealed partial class MainWindow
         Guid operationId,
         CancellationToken cancellationToken)
     {
+        _powerStateRevisionGate.BeginMutation();
         var result = await GetRecoveryService().RestoreBeforeStateAsync(
             operationId,
             cancellationToken);

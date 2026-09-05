@@ -630,6 +630,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
+            if (!_powerStateRevisionGate.CanApply(refreshRevision, _modeSwitchInProgress))
+                return;
             if (!_persistentModeSwitchPresentation)
             {
                 StatusText.Text = exception.Message;
