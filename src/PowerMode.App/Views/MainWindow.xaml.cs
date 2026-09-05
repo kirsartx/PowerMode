@@ -587,7 +587,9 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshStatusAsync()
     {
-        if (_modeSwitchInProgress || Interlocked.CompareExchange(ref _refreshInProgress, 1, 0) != 0)
+        if (_modeSwitchInProgress ||
+            _powerStateRevisionGate.MutationInProgress ||
+            Interlocked.CompareExchange(ref _refreshInProgress, 1, 0) != 0)
             return;
 
         var refreshButtonWasEnabled = RefreshButton.IsEnabled;

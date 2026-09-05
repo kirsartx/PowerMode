@@ -4,7 +4,7 @@
 
 **Goal:** Prevent an in-flight refresh from applying a stale power state after a mode mutation begins.
 
-**Architecture:** Add a small thread-safe `PowerStateRevisionGate` service with capture, mutation invalidation, and applicability checks. `MainWindow` captures a revision before `ReadStateAsync`, advances the revision at the central mode transaction boundary, and rejects stale results before any state or status presentation update.
+**Architecture:** Add a small thread-safe `PowerStateRevisionGate` service with capture, mutation lifecycle tracking, invalidation, and applicability checks. `MainWindow` captures a revision before `ReadStateAsync`, advances the revision at every power-write boundary, blocks new refreshes while a mutation is active, and rejects stale results before any state or status presentation update.
 
 **Tech Stack:** C#/.NET 10, WinUI 3, xUnit, existing `PowerMode.App` service and test projects.
 
@@ -122,6 +122,7 @@ git commit -m "test: add power state revision gate"
 - `MainWindow` owns one `PowerStateRevisionGate` for the lifetime of the window.
 - Refresh captures `long refreshRevision` before awaiting the backend.
 - Mode transaction calls `_powerStateRevisionGate.BeginMutation()` immediately before setting `_modeSwitchInProgress = true`.
+- Recovery and exit snapshot restoration call `BeginMutation()` before awaiting their write operation and `EndMutation()` in `finally`.
 
 - [ ] **Step 1: Add a failing source contract for the stale-result boundary**
 
@@ -187,6 +188,10 @@ At the central mode mutation boundary, immediately before `_modeSwitchInProgress
 _powerStateRevisionGate.BeginMutation();
 _modeSwitchInProgress = true;
 ```
+
+End that mutation from the existing `finally` block. Wrap `RestoreBeforeStateAsync` and `AppWindow_Closing` exit snapshot restoration with the same `BeginMutation`/`EndMutation` lifecycle so refreshes cannot start while a recovery write is awaiting completion.
+
+Capture a verification revision before `VerifyLastOperationAsync` and only apply its returned state when `CanApply` still accepts the revision after startup recovery resumes.
 
 - [ ] **Step 4: Run the focused tests and verify GREEN**
 

@@ -82,6 +82,9 @@ public sealed class RefreshInteractionPresentationTests
             "varrefreshRevision=_powerStateRevisionGate.Capture()",
             refreshMethod);
         Assert.Contains(
+            "if(_modeSwitchInProgress||_powerStateRevisionGate.MutationInProgress||Interlocked.CompareExchange(ref_refreshInProgress,1,0)!=0)return",
+            refreshMethod);
+        Assert.Contains(
             "if(!_powerStateRevisionGate.CanApply(refreshRevision,_modeSwitchInProgress))return",
             refreshMethod);
         Assert.Contains(
@@ -108,6 +111,7 @@ public sealed class RefreshInteractionPresentationTests
             "_modeSwitchInProgress=true",
             StringComparison.Ordinal);
         Assert.True(beginMutation >= 0 && beginMutation < setMutationFlag);
+        Assert.Contains("_powerStateRevisionGate.EndMutation()", mutationMethod);
 
         var recoverySource = File.ReadAllText(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.AdvancedFeatures.cs"));
@@ -121,6 +125,36 @@ public sealed class RefreshInteractionPresentationTests
             "GetRecoveryService().RestoreBeforeStateAsync(",
             StringComparison.Ordinal);
         Assert.True(recoveryMutation >= 0 && recoveryMutation < restoreCall);
+        Assert.Contains("_powerStateRevisionGate.EndMutation()", recoveryMethod);
+
+        var featuresSource = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.Features.cs"));
+        var closingMethod = Minify(MethodBody(
+            featuresSource,
+            "private async void AppWindow_Closing"));
+        var exitMutation = closingMethod.IndexOf(
+            "_powerStateRevisionGate.BeginMutation()",
+            StringComparison.Ordinal);
+        var exitRestore = closingMethod.IndexOf(
+            "_exitRestoreCoordinator.RestoreLaunchStateAsync(",
+            StringComparison.Ordinal);
+        Assert.True(exitMutation >= 0 && exitMutation < exitRestore);
+        Assert.Contains("_powerStateRevisionGate.EndMutation()", closingMethod);
+
+        var verifyMethod = Minify(MethodBody(
+            mutationSource,
+            "internal async Task<LastOperationVerificationResult> VerifyLastOperationAsync"));
+        Assert.Contains("ResumeStartupAfterRecoveryAsync(cancellationToken)", verifyMethod);
+
+        var verifySummaryMethod = Minify(MethodBody(
+            featuresSource,
+            "internal async Task VerifyWithSummaryAsync"));
+        Assert.Contains(
+            "_powerStateRevisionGate.CanApply(verificationRevision,_modeSwitchInProgress)",
+            verifySummaryMethod);
+        Assert.Contains(
+            "ApplyPowerModeState(currentState)",
+            verifySummaryMethod);
     }
 
     [Fact]

@@ -198,9 +198,17 @@ public sealed partial class MainWindow
         CancellationToken cancellationToken)
     {
         _powerStateRevisionGate.BeginMutation();
-        var result = await GetRecoveryService().RestoreBeforeStateAsync(
-            operationId,
-            cancellationToken);
+        RecoveryActionResult result;
+        try
+        {
+            result = await GetRecoveryService().RestoreBeforeStateAsync(
+                operationId,
+                cancellationToken);
+        }
+        finally
+        {
+            _powerStateRevisionGate.EndMutation();
+        }
         if (result.Succeeded)
         {
             ClearPersistentRecoveryPresentation();
@@ -428,7 +436,10 @@ public sealed partial class MainWindow
 
     private async Task<bool> RunAutomationTickAsync()
     {
-        if (!_featureSettings.AutoSwitchEnabled || _modeSwitchInProgress || _temperatureProtectionActive)
+        if (!_featureSettings.AutoSwitchEnabled ||
+            _modeSwitchInProgress ||
+            _powerStateRevisionGate.MutationInProgress ||
+            _temperatureProtectionActive)
             return false;
 
         AutomationSnapshot snapshot;
@@ -542,7 +553,7 @@ public sealed partial class MainWindow
         SwitchRequestContext context,
         CustomPowerProfile? customProfile)
     {
-        if (_modeSwitchInProgress)
+        if (_modeSwitchInProgress || _powerStateRevisionGate.MutationInProgress)
         {
             StatusText.Text = IsChinese
                 ? "另一项电源操作正在进行。"
@@ -648,6 +659,7 @@ public sealed partial class MainWindow
         {
             _pendingMode = null;
             _modeSwitchInProgress = false;
+            _powerStateRevisionGate.EndMutation();
             BusyProgress.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             RenderRecommendation();
         }

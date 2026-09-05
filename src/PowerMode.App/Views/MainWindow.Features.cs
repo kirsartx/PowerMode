@@ -173,7 +173,7 @@ public sealed partial class MainWindow
     }
     private async void FeatureTimer_Tick(object? sender,object e)
     {
-        if(_featureTickInProgress||_modeSwitchInProgress)return;
+        if(_featureTickInProgress||_modeSwitchInProgress||_powerStateRevisionGate.MutationInProgress)return;
         _featureTickInProgress=true;
         try
         {
@@ -235,9 +235,18 @@ public sealed partial class MainWindow
                 return;
 
             _exitRestoreInProgress = true;
-            var decision = await _exitRestoreCoordinator.RestoreLaunchStateAsync(
-                startupState);
-            _exitRestoreInProgress = false;
+            _powerStateRevisionGate.BeginMutation();
+            ExitRestoreDecision decision;
+            try
+            {
+                decision = await _exitRestoreCoordinator.RestoreLaunchStateAsync(
+                    startupState);
+            }
+            finally
+            {
+                _powerStateRevisionGate.EndMutation();
+                _exitRestoreInProgress = false;
+            }
             if (!decision.ShouldClose)
             {
                 if (decision.Operation is { } failedOperation)
@@ -305,7 +314,7 @@ public sealed partial class MainWindow
             ShowCorruptSettingsWarning();
             return;
         }
-        if(_modeSwitchInProgress)return;
+        if(_modeSwitchInProgress||_powerStateRevisionGate.MutationInProgress)return;
         if (await RunTargetCoreAsync(
             PowerModeTarget.ForCustom(CustomPowerProfileSnapshot.FromSettings(profile)),
             cpuMaximumPercent: null,
@@ -333,10 +342,12 @@ public sealed partial class MainWindow
         }
         if (availability.Record is { } record)
         {
+            var verificationRevision = _powerStateRevisionGate.Capture();
             var result = await VerifyLastOperationAsync(
                 record.OperationId,
                 CancellationToken.None);
-            if (result.CurrentState is { } currentState)
+            if (result.CurrentState is { } currentState &&
+                _powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
                 ApplyPowerModeState(currentState);
             StatusText.Text = result.Error ?? (result.MatchesCriticalExpectations
                 ? (IsChinese ? "最近电源操作已验证。" : "The last power operation is verified.")
