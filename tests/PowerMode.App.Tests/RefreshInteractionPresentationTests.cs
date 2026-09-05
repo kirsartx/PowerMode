@@ -158,6 +158,14 @@ public sealed class RefreshInteractionPresentationTests
         Assert.Contains(
             "varverificationRevision=_powerStateRevisionGate.Capture()",
             verifySummaryMethod);
+        var verificationCheck = verifySummaryMethod.IndexOf(
+            "CanApply(verificationRevision,_modeSwitchInProgress)",
+            StringComparison.Ordinal);
+        var verificationStatus = verifySummaryMethod.IndexOf(
+            "StatusText.Text=result.Error",
+            verificationCheck,
+            StringComparison.Ordinal);
+        Assert.True(verificationCheck >= 0 && verificationStatus > verificationCheck);
 
         var noJournalRead = verifySummaryMethod.IndexOf(
             "varcurrent=await_powerModeBackend.ReadStateAsync(",
@@ -167,6 +175,10 @@ public sealed class RefreshInteractionPresentationTests
             noJournalRead,
             StringComparison.Ordinal);
         Assert.True(noJournalRead >= 0 && noJournalCheck > noJournalRead);
+        Assert.Contains(
+            "Interlocked.CompareExchange(ref_refreshInProgress,1,0)",
+            verifySummaryMethod);
+        Assert.Contains("Volatile.Write(ref_refreshInProgress,0)", verifySummaryMethod);
 
         Assert.Contains("varmutationStarted=false", mutationMethod);
         Assert.Contains("if(mutationStarted)_powerStateRevisionGate.EndMutation()", mutationMethod);

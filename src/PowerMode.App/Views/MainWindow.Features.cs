@@ -349,6 +349,8 @@ public sealed partial class MainWindow
             var result = await VerifyLastOperationAsync(
                 record.OperationId,
                 CancellationToken.None);
+            if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
+                return;
             if (result.CurrentState is { } currentState &&
                 _powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
                 ApplyPowerModeState(currentState);
@@ -362,21 +364,30 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (_modeSwitchInProgress || _powerStateRevisionGate.MutationInProgress)
+        if (_modeSwitchInProgress ||
+            _powerStateRevisionGate.MutationInProgress ||
+            Interlocked.CompareExchange(ref _refreshInProgress, 1, 0) != 0)
             return;
-        var fallbackRevision = _powerStateRevisionGate.Capture();
-        var current = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
-        if (!_powerStateRevisionGate.CanApply(fallbackRevision, _modeSwitchInProgress))
-            return;
-        AppendBackendDiagnostics(current.Operation);
-        if (current.State is { } state)
-            ApplyPowerModeState(state);
-        StatusText.Text = current.State is null
-            ? (IsChinese ? "无法可靠验证当前状态。" : "The current state could not be verified reliably.")
-            : (IsChinese ? "当前电源状态可读取且契约有效。" : "The current power state is readable and contract-valid.");
-        StatusBar.Severity = current.State is null
-            ? InfoBarSeverity.Error
-            : InfoBarSeverity.Success;
+        try
+        {
+            var fallbackRevision = _powerStateRevisionGate.Capture();
+            var current = await _powerModeBackend.ReadStateAsync(Guid.NewGuid());
+            if (!_powerStateRevisionGate.CanApply(fallbackRevision, _modeSwitchInProgress))
+                return;
+            AppendBackendDiagnostics(current.Operation);
+            if (current.State is { } state)
+                ApplyPowerModeState(state);
+            StatusText.Text = current.State is null
+                ? (IsChinese ? "无法可靠验证当前状态。" : "The current state could not be verified reliably.")
+                : (IsChinese ? "当前电源状态可读取且契约有效。" : "The current power state is readable and contract-valid.");
+            StatusBar.Severity = current.State is null
+                ? InfoBarSeverity.Error
+                : InfoBarSeverity.Success;
+        }
+        finally
+        {
+            Volatile.Write(ref _refreshInProgress, 0);
+        }
     }
     private async void RepairButton_Click(object sender,RoutedEventArgs e)
     {
