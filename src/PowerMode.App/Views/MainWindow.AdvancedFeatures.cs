@@ -197,17 +197,20 @@ public sealed partial class MainWindow
         Guid operationId,
         CancellationToken cancellationToken)
     {
-        _powerStateRevisionGate.BeginMutation();
+        var mutationStarted = false;
         RecoveryActionResult result;
         try
         {
+            _powerStateRevisionGate.BeginMutation();
+            mutationStarted = true;
             result = await GetRecoveryService().RestoreBeforeStateAsync(
                 operationId,
                 cancellationToken);
         }
         finally
         {
-            _powerStateRevisionGate.EndMutation();
+            if (mutationStarted)
+                _powerStateRevisionGate.EndMutation();
         }
         if (result.Succeeded)
         {

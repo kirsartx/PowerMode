@@ -235,16 +235,19 @@ public sealed partial class MainWindow
                 return;
 
             _exitRestoreInProgress = true;
-            _powerStateRevisionGate.BeginMutation();
+            var mutationStarted = false;
             ExitRestoreDecision decision;
             try
             {
+                _powerStateRevisionGate.BeginMutation();
+                mutationStarted = true;
                 decision = await _exitRestoreCoordinator.RestoreLaunchStateAsync(
                     startupState);
             }
             finally
             {
-                _powerStateRevisionGate.EndMutation();
+                if (mutationStarted)
+                    _powerStateRevisionGate.EndMutation();
                 _exitRestoreInProgress = false;
             }
             if (!decision.ShouldClose)
