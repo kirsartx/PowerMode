@@ -29,7 +29,7 @@
 - Produces `PowerStateRevisionGate.BeginMutation() -> long`.
 - Produces `PowerStateRevisionGate.CanApply(long capturedRevision, bool mutationInProgress) -> bool`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 [Fact]
@@ -72,7 +72,7 @@ public void ActiveMutationBlocksEvenTheCurrentRevision()
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify the expected RED state**
+- [x] **Step 2: Run the focused test and verify the expected RED state**
 
 Run:
 
@@ -82,7 +82,7 @@ dotnet test .\tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Release -p
 
 Expected: compilation/test failure because `PowerStateRevisionGate` does not exist.
 
-- [ ] **Step 3: Implement the smallest thread-safe gate**
+- [x] **Step 3: Implement the smallest thread-safe gate**
 
 ```csharp
 namespace PowerModeWinUI;
@@ -100,11 +100,11 @@ internal sealed class PowerStateRevisionGate
 }
 ```
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Expected: 4/4 passed with no warnings or errors.
 
-- [ ] **Step 5: Commit the isolated service and tests**
+- [x] **Step 5: Commit the isolated service and tests**
 
 ```powershell
 git add -- src/PowerMode.App/Services/PowerStateRevisionGate.cs tests/PowerMode.App.Tests/PowerStateRevisionGateTests.cs
@@ -125,7 +125,7 @@ git commit -m "test: add power state revision gate"
 - Mode transaction calls `_powerStateRevisionGate.BeginMutation()` immediately before setting `_modeSwitchInProgress = true`.
 - Recovery and exit snapshot restoration call `BeginMutation()` before awaiting their write operation and `EndMutation()` in `finally`.
 
-- [ ] **Step 1: Add a failing source contract for the stale-result boundary**
+- [x] **Step 1: Add a failing source contract for the stale-result boundary**
 
 Extend `RefreshInteractionPresentationTests` with these assertions, using its existing `MethodBody` and `Minify` helpers:
 
@@ -154,7 +154,7 @@ var setMutationFlag = mutationMethod.IndexOf(
 Assert.True(beginMutation >= 0 && beginMutation < setMutationFlag);
 ```
 
-- [ ] **Step 2: Run the focused Refresh and revision tests**
+- [x] **Step 2: Run the focused Refresh and revision tests**
 
 ```powershell
 dotnet test .\tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Release -p:Platform=x64 -m:1 -p:UseSharedCompilation=false --no-restore --filter "FullyQualifiedName~RefreshInteractionPresentationTests|FullyQualifiedName~PowerStateRevisionGateTests"
@@ -162,7 +162,7 @@ dotnet test .\tests\PowerMode.App.Tests\PowerMode.App.Tests.csproj -c Release -p
 
 Expected: the new boundary assertions fail because the window is not wired to the gate.
 
-- [ ] **Step 3: Wire the gate into MainWindow**
+- [x] **Step 3: Wire the gate into MainWindow**
 
 Add a field:
 
@@ -194,11 +194,11 @@ End that mutation from the existing `finally` block. Wrap `RestoreBeforeStateAsy
 
 Capture a verification revision before `VerifyLastOperationAsync` and only apply its returned state when `CanApply` still accepts the revision after startup recovery resumes.
 
-- [ ] **Step 4: Run the focused tests and verify GREEN**
+- [x] **Step 4: Run the focused tests and verify GREEN**
 
 Expected: all focused tests pass and no existing Refresh contract regresses.
 
-- [ ] **Step 5: Commit the integration**
+- [x] **Step 5: Commit the integration**
 
 ```powershell
 git add -- src/PowerMode.App/Views/MainWindow.xaml.cs src/PowerMode.App/Views/MainWindow.AdvancedFeatures.cs tests/PowerMode.App.Tests/RefreshInteractionPresentationTests.cs
@@ -211,7 +211,7 @@ git commit -m "fix: discard stale refresh state"
 - Modify: `.superpowers/sdd/progress.md` (ignored local ledger)
 - Create: `.superpowers/sdd/task-15-report.md` (ignored local report)
 
-- [ ] **Step 1: Run the full Release test suite**
+- [x] **Step 1: Run the full Release test suite**
 
 ```powershell
 dotnet test .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompilation=false --no-restore --logger "console;verbosity=minimal"
@@ -219,7 +219,7 @@ dotnet test .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompila
 
 Expected: all tests pass, 0 failed.
 
-- [ ] **Step 2: Run the Release build**
+- [x] **Step 2: Run the Release build**
 
 ```powershell
 dotnet build .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompilation=false --no-restore
@@ -227,7 +227,7 @@ dotnet build .\PowerMode.slnx -c Release -p:Platform=x64 -m:1 -p:UseSharedCompil
 
 Expected: 0 warnings and 0 errors.
 
-- [ ] **Step 3: Run the formal portable publish**
+- [x] **Step 3: Run the formal portable publish**
 
 ```powershell
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\Publish-Portable.ps1 -Root . -CreateZip
@@ -235,10 +235,10 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 
 
 Expected: the internal full test gate passes, the portable directory and ZIP are produced, and no staging/backup residue remains.
 
-- [ ] **Step 4: Audit the release artifacts**
+- [x] **Step 4: Audit the release artifacts**
 
 Verify `build-info.json` points to the current HEAD, the ZIP hash equals `PowerMode-win-x64.zip.sha256`, and the portable root contains no PDB, test, `obj`, `bin`, or intermediate artifacts.
 
-- [ ] **Step 5: Record the report and final state**
+- [x] **Step 5: Record the report and final state**
 
 Record the focused/full test counts, build result, publish hash result, commit IDs, and the existing environment restriction that prevents safe real GUI input testing while auto-switch is enabled.
