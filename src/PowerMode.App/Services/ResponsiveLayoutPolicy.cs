@@ -118,6 +118,12 @@ internal static class ResponsiveLayoutPolicy
     public const double MediumMinimumWidth = 760;
     public const double WideMinimumWidth = 1040;
 
+    // The layout depends only on (tier, experienceMode): 3 x 2 combinations. Resize fires
+    // SizeChanged continuously, so memoize to avoid rebuilding the toolbar dictionary each pass.
+    // ResponsiveLayoutState is immutable and consumers only read it, so sharing is safe.
+    private static readonly ResponsiveLayoutState[,] LayoutCache =
+        new ResponsiveLayoutState[3, 2];
+
     public static ResponsiveLayoutState Evaluate(
         double logicalWidth,
         ExperienceMode experienceMode)
@@ -127,6 +133,22 @@ internal static class ResponsiveLayoutPolicy
             : logicalWidth >= MediumMinimumWidth
                 ? LayoutTier.Medium
                 : LayoutTier.Narrow;
+
+        var tierIndex = (int)tier;
+        var modeIndex = experienceMode == ExperienceMode.Simple ? 0 : 1;
+        var cached = Volatile.Read(ref LayoutCache[tierIndex, modeIndex]);
+        if (cached is not null)
+            return cached;
+
+        var state = BuildLayout(tier, experienceMode);
+        Volatile.Write(ref LayoutCache[tierIndex, modeIndex], state);
+        return state;
+    }
+
+    private static ResponsiveLayoutState BuildLayout(
+        LayoutTier tier,
+        ExperienceMode experienceMode)
+    {
         var toolbar = Enum.GetValues<ToolbarAction>().ToDictionary(
             action => action,
             action => action switch

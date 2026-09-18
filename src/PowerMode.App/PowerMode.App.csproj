@@ -18,9 +18,13 @@
     <UseWinUI>true</UseWinUI>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- VSTHRD100: async void is required for XAML/WinUI event handlers.
+         VSTHRD200: naming style is not enforced project-wide. -->
+    <NoWarn>$(NoWarn);VSTHRD100;VSTHRD200</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="17.12.19" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PowerMode.App.Tests" />

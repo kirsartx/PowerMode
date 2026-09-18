@@ -192,7 +192,16 @@ public sealed partial class MainWindow
             if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
                 return result;
             ClearPersistentRecoveryPresentation();
-            await ResumeStartupAfterRecoveryAsync(cancellationToken);
+            try
+            {
+                await ResumeStartupAfterRecoveryAsync(cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Verification already succeeded; a deferred startup-activation failure
+                // here must not turn the verified result into an error/blank status bar.
+                AppendLog($"Startup activation resume after verification failed: {exception.Message}");
+            }
         }
         return result;
     }
@@ -765,7 +774,15 @@ public sealed partial class MainWindow
             RecommendationTitle is null ||
             RecommendationReason is null ||
             ApplyRecommendationButton is null)
+        {
+            // Nothing to suggest yet: hide the whole card instead of leaving an empty box.
+            if (RecommendationCard is not null)
+                RecommendationCard.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             return;
+        }
+
+        if (RecommendationCard is not null)
+            RecommendationCard.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
 
         var presentation = RecommendationUiLogic.CreatePresentation(
             recommendation,

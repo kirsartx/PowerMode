@@ -31,6 +31,8 @@ internal interface IModeSwitchCoordinator
 internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
 {
     private const int JournalSchemaVersion = 1;
+    private static readonly PowerModeStateField[] AllStateFields =
+        Enum.GetValues<PowerModeStateField>();
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(90);
     private static readonly Guid SaverScheme =
         Guid.Parse("a1841308-3541-4fab-bc81-f71556f20b4a");
@@ -946,7 +948,7 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         PowerModeState snapshot)
     {
         var expectations = new List<VerificationExpectation>();
-        foreach (var field in Enum.GetValues<PowerModeStateField>())
+        foreach (var field in AllStateFields)
         {
             var value = GetFieldValue(snapshot, field);
             if (value is not null)
@@ -1007,13 +1009,13 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         {
             return false;
         }
-        var actual = operation.Expectations
-            .Select(expectation => (expectation.Field, expectation.ExpectedValue, expectation.Critical))
-            .ToHashSet();
-        var planned = expected
-            .Select(expectation => (expectation.Field, expectation.ExpectedValue, expectation.Critical))
-            .ToHashSet();
-        return actual.SetEquals(planned);
+        if (operation.Expectations.Count != expected.Count)
+            return false;
+        var planned = new HashSet<(PowerModeStateField Field, string Value, bool Critical)>(
+            expected.Select(expectation =>
+                (expectation.Field, expectation.ExpectedValue, expectation.Critical)));
+        return operation.Expectations.All(expectation =>
+            planned.Contains((expectation.Field, expectation.ExpectedValue, expectation.Critical)));
     }
 
     private static IReadOnlyList<PowerModeStateField> CompareExpectations(
@@ -1035,7 +1037,7 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
     {
         if (actual is null)
             return false;
-        foreach (var field in Enum.GetValues<PowerModeStateField>())
+        foreach (var field in AllStateFields)
         {
             var expectedValue = GetFieldValue(expected, field);
             if (expectedValue is not null && !ValueEquals(

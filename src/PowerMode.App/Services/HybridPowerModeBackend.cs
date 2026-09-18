@@ -1,0 +1,78 @@
+using System.Diagnostics;
+
+namespace PowerModeWinUI;
+
+/// <summary>
+/// Wraps the PowerShell engine backend and answers status reads natively through powrprof,
+/// removing the ~2.7s cold start from every read (twice per mode switch plus every refresh).
+/// Mutations (apply/restore) still run through the engine unchanged, so write behaviour and
+/// the rollback-verification contract are identical. If a native read cannot produce a
+/// reliable state it transparently falls back to the engine.
+/// </summary>
+internal sealed class HybridPowerModeBackend : IPowerModeBackend
+{
+    private readonly IPowerModeBackend _engine;
+    private readonly NativePowerStateReader _reader;
+
+    public HybridPowerModeBackend(IPowerModeBackend engine, NativePowerStateReader reader)
+    {
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _reader = reader ?? throw new ArgumentNullException(nameof(reader));
+    }
+
+    public Task<PowerModeStateResult> ReadStateAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var stopwatch = Stopwatch.StartNew();
+
+        PowerModeState? state = null;
+        try
+        {
+            state = _reader.TryRead();
+        }
+        catch
+        {
+            state = null;
+        }
+
+        if (state is not null)
+        {
+            var operation = new BackendOperationResult(
+                operationId,
+                "status",
+                null,
+                DateTimeOffset.UtcNow,
+                stopwatch.Elapsed,
+                BackendOperationOutcome.Succeeded,
+                state,
+                state,
+                Array.Empty<BackendStepResult>(),
+                Array.Empty<VerificationExpectation>(),
+                null);
+            return Task.FromResult(new PowerModeStateResult(state, operation));
+        }
+
+        return _engine.ReadStateAsync(operationId, cancellationToken);
+    }
+
+    public Task<BackendOperationResult> ApplyAsync(
+        Guid operationId,
+        PowerModeTarget target,
+        int? cpuMaximumPercent = null,
+        bool disableWifi = false,
+        CancellationToken cancellationToken = default) =>
+        _engine.ApplyAsync(
+            operationId,
+            target,
+            cpuMaximumPercent,
+            disableWifi,
+            cancellationToken);
+
+    public Task<BackendOperationResult> RestoreAsync(
+        Guid operationId,
+        PowerModeState snapshot,
+        CancellationToken cancellationToken = default) =>
+        _engine.RestoreAsync(operationId, snapshot, cancellationToken);
+}

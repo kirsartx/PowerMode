@@ -835,6 +835,8 @@ internal static class SystemStateProbe
     private const uint MonitorDefaultToNearest = 2;
     private const int DwmwaExtendedFrameBounds = 9;
     private const int WtsClientProtocolType = 16;
+    private const uint Th32csSnapProcess = 0x2;
+    private static readonly nint InvalidHandle = new(-1);
 
     public static AutomationSnapshot Capture()
     {
@@ -882,25 +884,38 @@ internal static class SystemStateProbe
     private static List<string> CaptureProcesses()
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var process in Process.GetProcesses())
+        var snapshot = Native.CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+        if (snapshot == InvalidHandle)
         {
-            using (process)
+            return [.. names];
+        }
+
+        try
+        {
+            var entry = new Native.ProcessEntry32
             {
-                try
+                Size = (uint)Marshal.SizeOf<Native.ProcessEntry32>()
+            };
+            if (Native.Process32FirstW(snapshot, ref entry))
+            {
+                do
                 {
-                    if (!string.IsNullOrWhiteSpace(process.ProcessName))
+                    var exeFile = entry.ExeFile;
+                    if (!string.IsNullOrWhiteSpace(exeFile))
                     {
-                        names.Add(process.ProcessName);
+                        var name = Path.GetFileNameWithoutExtension(exeFile);
+                        if (!string.IsNullOrEmpty(name))
+                            names.Add(name);
                     }
                 }
-                catch (InvalidOperationException)
-                {
-                }
-                catch (System.ComponentModel.Win32Exception)
-                {
-                }
+                while (Native.Process32NextW(snapshot, ref entry));
             }
         }
+        finally
+        {
+            Native.CloseHandle(snapshot);
+        }
+
         return [.. names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
     }
 
@@ -1061,6 +1076,38 @@ internal static class SystemStateProbe
             public Rect WorkArea;
             public uint Flags;
         }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        internal struct ProcessEntry32
+        {
+            public uint Size;
+            public uint Usage;
+            public uint ProcessId;
+            public nint DefaultHeapID;
+            public uint ModuleId;
+            public uint Threads;
+            public uint ParentProcessId;
+            public int PriorityClass;
+            public uint Flags;
+
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string ExeFile;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern nint CreateToolhelp32Snapshot(uint flags, uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool Process32FirstW(nint snapshot, ref ProcessEntry32 entry);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool Process32NextW(nint snapshot, ref ProcessEntry32 entry);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool CloseHandle(nint handle);
 
         [DllImport("kernel32.dll")]
         internal static extern bool GetSystemPowerStatus(out SystemPowerStatus status);

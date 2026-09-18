@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -109,6 +110,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2.5);
     private static readonly TimeSpan UnknownProbeRetry = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan BatteryHealthCacheDuration = TimeSpan.FromMinutes(30);
+    private static readonly SearchValues<char> CsvSpecialChars = SearchValues.Create(",\"\r\n");
     private static readonly IProcessRunner CapabilityProcessRunner = new ProcessRunner();
     private readonly IMonitoringProbeRunner _probeRunner;
     private readonly TimeProvider _timeProvider;
@@ -674,7 +676,8 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
             var valid = 0;
             for (var i = 0; i < processorCount; i++)
             {
-                var item = Marshal.PtrToStructure<ProcessorPowerInformation>(buffer + (i * itemSize));
+                var item = Marshal.PtrToStructure<ProcessorPowerInformation>(
+                    buffer + (i * itemSize));
                 if (item.CurrentMhz is > 0 and < 20_000)
                 {
                     sum += item.CurrentMhz;
@@ -878,7 +881,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
     private static void AppendCsv(StringBuilder builder, string? value, bool isLast = false)
     {
         value ??= string.Empty;
-        if (value.IndexOfAny([',', '"', '\r', '\n']) >= 0)
+        if (value.IndexOfAny(CsvSpecialChars) >= 0)
             builder.Append('"').Append(value.Replace("\"", "\"\"")).Append('"');
         else
             builder.Append(value);

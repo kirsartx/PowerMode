@@ -152,6 +152,15 @@ public sealed partial class MainWindow
 
     private void ConfigureFeatureTimer(PowerModeSettings settings)
     {
+        // DispatcherTimer must be constructed on the UI thread. Activation can resume on a
+        // thread-pool thread (ConfigureAwait(false) chain), which otherwise throws
+        // COMException 0x8001010E (RPC_E_WRONG_THREAD) here.
+        if (!DispatcherQueue.HasThreadAccess)
+        {
+            DispatcherQueue.TryEnqueue(() => ConfigureFeatureTimer(settings));
+            return;
+        }
+
         _featureTimer?.Stop();_featureTimer??=new DispatcherTimer();_featureTimer.Tick-=FeatureTimer_Tick;_featureTimer.Interval=TimeSpan.FromSeconds(Math.Max(10,settings.MonitorIntervalSeconds));_featureTimer.Tick+=FeatureTimer_Tick;_featureTimer.Start();
     }
 
@@ -393,7 +402,9 @@ public sealed partial class MainWindow
             if (!_powerStateRevisionGate.CanApply(verificationRevision, _modeSwitchInProgress))
                 return;
             AppendLog($"Verify: {exception.Message}");
-            StatusText.Text = exception.Message;
+            StatusText.Text = string.IsNullOrWhiteSpace(exception.Message)
+                ? (IsChinese ? "校验失败：未知错误。" : "Verification failed: unknown error.")
+                : exception.Message;
             StatusBar.Severity = InfoBarSeverity.Error;
             StatusBar.IsOpen = true;
         }

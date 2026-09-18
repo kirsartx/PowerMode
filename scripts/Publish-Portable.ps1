@@ -94,6 +94,8 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) {
         throw "Release tests failed with exit code $LASTEXITCODE."
     }
+} else {
+    Write-Warning "-SkipTests is set: Release tests are bypassed. This build is for local diagnosis only and must not be published or distributed."
 }
 
 New-Item -ItemType Directory -Path $dist -Force | Out-Null

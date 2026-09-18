@@ -195,7 +195,9 @@ internal sealed class StartupCoordinator : IStartupCoordinator
         }
         catch (Exception exception)
         {
-            return Bound(exception.Message);
+            return Bound(string.IsNullOrWhiteSpace(exception.Message)
+                ? exception.GetType().Name
+                : exception.Message);
         }
     }
 
