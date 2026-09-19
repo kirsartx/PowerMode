@@ -884,10 +884,21 @@ internal static class SystemStateProbe
     private static List<string> CaptureProcesses()
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        TryCaptureProcessNames(names);
+        return [.. names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// Fills <paramref name="names"/> with running process names (no extension) via a
+    /// Toolhelp32 snapshot, avoiding a <see cref="System.Diagnostics.Process"/> object per
+    /// PID. Returns false when the snapshot could not be created.
+    /// </summary>
+    internal static bool TryCaptureProcessNames(ICollection<string> names)
+    {
         var snapshot = Native.CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
         if (snapshot == InvalidHandle)
         {
-            return [.. names];
+            return false;
         }
 
         try
@@ -916,7 +927,7 @@ internal static class SystemStateProbe
             Native.CloseHandle(snapshot);
         }
 
-        return [.. names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
+        return true;
     }
 
     private static string GetProcessName(nint window)

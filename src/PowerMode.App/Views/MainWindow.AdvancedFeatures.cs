@@ -716,32 +716,7 @@ public sealed partial class MainWindow
         }
 
         var runningProcessNames = new List<string>();
-        var runningProcessesAvailable = true;
-        Process[] processes;
-        try
-        {
-            processes = Process.GetProcesses();
-        }
-        catch
-        {
-            processes = [];
-            runningProcessesAvailable = false;
-        }
-
-        foreach (var process in processes)
-        {
-            using (process)
-            {
-                try
-                {
-                    runningProcessNames.Add(process.ProcessName);
-                }
-                catch
-                {
-                    // Processes can exit while their names are being read.
-                }
-            }
-        }
+        var runningProcessesAvailable = SystemStateProbe.TryCaptureProcessNames(runningProcessNames);
 
         return RecommendationUiLogic.CreateContext(
             _featureSettings,

@@ -778,10 +778,11 @@ public sealed class SystemIntegrationService : IDisposable
         command.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries)
             .Any(x => string.Equals(x.Trim('"'), argument, StringComparison.OrdinalIgnoreCase));
 
+    private static readonly HashSet<char> InvalidFileNameChars = new(Path.GetInvalidFileNameChars());
+
     private static string SanitizeFileComponent(string? value, string fallback)
     {
-        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
-        var result = new string((value ?? string.Empty).Where(c => !invalid.Contains(c) && !char.IsControl(c))
+        var result = new string((value ?? string.Empty).Where(c => !InvalidFileNameChars.Contains(c) && !char.IsControl(c))
             .Select(c => char.IsWhiteSpace(c) ? '-' : c).Take(80).ToArray()).Trim('.', '-', ' ');
         return string.IsNullOrEmpty(result) ? fallback : result;
     }

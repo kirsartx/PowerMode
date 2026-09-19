@@ -195,13 +195,6 @@ public sealed partial class MainWindow
             _featureTickInProgress=false;
         }
     }
-    private string DetermineAutomaticMode()
-    {
-        var names=Process.GetProcesses().Select(p=>{try{return p.ProcessName;}catch{return string.Empty;}}).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if(SplitProcesses(_featureSettings.RemoteProcesses).Any(names.Contains))return "remote";if(SplitProcesses(_featureSettings.PerformanceProcesses).Any(names.Contains))return "high";
-        return Native.GetSystemPowerStatus(out var power)&&power.ACLineStatus==0?"saver":"balanced";
-    }
-    private static IEnumerable<string> SplitProcesses(string text)=>text.Split([',',';','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Select(x=>Path.GetFileNameWithoutExtension(x)??x);
 
     private void AppWindow_Changed(Microsoft.UI.Windowing.AppWindow sender,Microsoft.UI.Windowing.AppWindowChangedEventArgs args)
     {
