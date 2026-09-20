@@ -12,6 +12,9 @@ internal interface IPowerNativeApi
     bool TryGetActiveScheme(out Guid schemeGuid);
     bool TryReadAcValue(Guid scheme, Guid subgroup, Guid setting, out int value);
     bool TryReadDcValue(Guid scheme, Guid subgroup, Guid setting, out int value);
+    bool TrySetActiveScheme(Guid scheme);
+    bool TryWriteAcValue(Guid scheme, Guid subgroup, Guid setting, int value);
+    bool TryWriteDcValue(Guid scheme, Guid subgroup, Guid setting, int value);
     PowerSourceKind ReadPowerSource();
     bool? ReadWifiDisabled();
 }
@@ -147,6 +150,21 @@ internal sealed class WindowsPowerNativeApi : IPowerNativeApi
         return result == 0;
     }
 
+    public bool TrySetActiveScheme(Guid scheme) =>
+        PowerSetActiveScheme(IntPtr.Zero, ref scheme) == 0;
+
+    public bool TryWriteAcValue(Guid scheme, Guid subgroup, Guid setting, int value)
+    {
+        uint raw = unchecked((uint)value);
+        return PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref subgroup, ref setting, raw) == 0;
+    }
+
+    public bool TryWriteDcValue(Guid scheme, Guid subgroup, Guid setting, int value)
+    {
+        uint raw = unchecked((uint)value);
+        return PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref subgroup, ref setting, raw) == 0;
+    }
+
     public PowerSourceKind ReadPowerSource()
     {
         if (!GetSystemPowerStatus(out var status))
@@ -237,4 +255,25 @@ internal sealed class WindowsPowerNativeApi : IPowerNativeApi
         ref Guid subGroupGuid,
         ref Guid settingGuid,
         ref uint value);
+
+    [DllImport("powrprof.dll")]
+    private static extern int PowerSetActiveScheme(
+        IntPtr userPowerKey,
+        ref Guid schemeGuid);
+
+    [DllImport("powrprof.dll")]
+    private static extern int PowerWriteACValueIndex(
+        IntPtr rootPowerKey,
+        ref Guid schemeGuid,
+        ref Guid subGroupGuid,
+        ref Guid settingGuid,
+        uint value);
+
+    [DllImport("powrprof.dll")]
+    private static extern int PowerWriteDCValueIndex(
+        IntPtr rootPowerKey,
+        ref Guid schemeGuid,
+        ref Guid subGroupGuid,
+        ref Guid settingGuid,
+        uint value);
 }

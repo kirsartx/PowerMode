@@ -50,7 +50,8 @@ public sealed partial class MainWindow : Window
         _monitoringService = new MonitoringService(_processRunner, 720);
         _powerModeBackend = new HybridPowerModeBackend(
             new PowerModeBackend(_processRunner, _enginePath),
-            new NativePowerStateReader());
+            new NativePowerStateReader(),
+            new NativePowerApplier(new WindowsPowerNativeApi()));
         _lastOperationStore = new LastOperationStore();
         _startupMutationGate = new StartupMutationGate();
         _modeSwitchCoordinator = new ModeSwitchCoordinator(
