@@ -179,6 +179,66 @@ public sealed class RecommendationUiLogicTests
     }
 
     [Fact]
+    public void CreatePresentation_WhenAlreadyOnRecommendedMode_ShowsPositiveState()
+    {
+        var recommendation = new ModeRecommendation(
+            "balanced",
+            "当前为日常插电场景，建议使用平衡",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.DailyAc);
+
+        var result = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            modeDisplayName: "平衡",
+            isChinese: true,
+            currentMode: "balanced");
+
+        Assert.Equal("当前已是推荐模式", result.Title);
+        Assert.Equal("当前模式", result.ApplyText);
+    }
+
+    [Fact]
+    public void CreatePresentation_AlreadyOptimalComparisonIsTrimmedCaseInsensitive()
+    {
+        var recommendation = new ModeRecommendation(
+            "remote",
+            "检测到远程连接程序",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.RemoteProcess);
+
+        var result = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            modeDisplayName: "Remote",
+            isChinese: false,
+            currentMode: "  REMOTE  ");
+
+        Assert.Equal("You're on the recommended mode", result.Title);
+        Assert.Equal("Current mode", result.ApplyText);
+    }
+
+    [Fact]
+    public void CreatePresentation_WhenCurrentModeDiffers_StillSuggestsAndEnablesApply()
+    {
+        var recommendation = new ModeRecommendation(
+            "saver",
+            "当前使用电池供电",
+            IsComplete: true,
+            DateTimeOffset.Now,
+            RecommendationReasonCode.BatteryPower);
+
+        var result = RecommendationUiLogic.CreatePresentation(
+            recommendation,
+            modeDisplayName: "低功耗",
+            isChinese: true,
+            currentMode: "balanced");
+
+        Assert.Equal("建议：低功耗", result.Title);
+        Assert.Equal("一键应用", result.ApplyText);
+    }
+
+    [Fact]
     public void CreatePresentation_EnglishLocalizesReasonWithoutChineseServiceText()
     {
         var recommendation = new ModeRecommendation(

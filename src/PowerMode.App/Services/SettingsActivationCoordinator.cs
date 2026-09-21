@@ -52,13 +52,13 @@ internal sealed class SettingsActivationCoordinator
         if (plan.ConfigureStartup)
             _effects.ConfigureStartup();
         if (plan.CreateStartupBackup)
-            await _effects.CreateStartupBackupAsync(cancellationToken).ConfigureAwait(false);
+            await _effects.CreateStartupBackupAsync(cancellationToken);
         if (plan.StartAutomation)
             _effects.StartAutomation();
         if (plan.ApplyLastMode)
-            await _effects.ApplyLastModeAsync(cancellationToken).ConfigureAwait(false);
+            await _effects.ApplyLastModeAsync(cancellationToken);
         if (plan.CheckUpdates)
-            await _effects.CheckUpdatesAsync(cancellationToken).ConfigureAwait(false);
+            await _effects.CheckUpdatesAsync(cancellationToken);
     }
 
     public void AcceptRecoveredSettings(SettingsLoadResult recovered)

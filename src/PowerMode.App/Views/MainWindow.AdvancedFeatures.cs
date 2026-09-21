@@ -742,6 +742,15 @@ public sealed partial class MainWindow
 
     private void RenderRecommendation()
     {
+        // Touches XAML (button IsEnabled, TextBlocks, card Visibility). Activation can reach
+        // this off the UI thread via StartAutomation -> RefreshRecommendationAsync, which
+        // otherwise throws COMException 0x8001010E.
+        if (!DispatcherQueue.HasThreadAccess)
+        {
+            DispatcherQueue.TryEnqueue(RenderRecommendation);
+            return;
+        }
+
         var activeProjection=ProjectActiveModePresentation();
         ApplyModeButtonPresentation(activeProjection.ModeButtons);
         if (_currentRecommendation is not { } recommendation ||
@@ -762,7 +771,8 @@ public sealed partial class MainWindow
         var presentation = RecommendationUiLogic.CreatePresentation(
             recommendation,
             GetModeDisplayName(recommendation.Mode),
-            IsChinese);
+            IsChinese,
+            _activeModeKey);
         RecommendationTitle.Text = presentation.Title;
         RecommendationReason.Text = presentation.Reason;
         ApplyRecommendationButton.Content = applyState.Text;

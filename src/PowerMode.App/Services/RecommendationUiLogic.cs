@@ -87,7 +87,8 @@ internal static class RecommendationUiLogic
     public static RecommendationPresentation CreatePresentation(
         ModeRecommendation recommendation,
         string modeDisplayName,
-        bool isChinese)
+        bool isChinese,
+        string? currentMode = null)
     {
         var localizedReason = LocalizeReason(recommendation.ReasonCode, isChinese);
         var visibleReason = recommendation.IsComplete
@@ -95,23 +96,35 @@ internal static class RecommendationUiLogic
             : isChinese
                 ? $"信息不完整：{localizedReason}"
                 : $"Information incomplete: {localizedReason}";
+
+        // When the machine is already on the recommended mode, show a positive "you're good"
+        // state instead of a redundant "建议：X / Apply" that the user can't act on.
+        var alreadyApplied = recommendation.IsComplete
+            && !string.IsNullOrWhiteSpace(currentMode)
+            && string.Equals(
+                recommendation.Mode.Trim(), currentMode.Trim(), StringComparison.OrdinalIgnoreCase);
+
         if (isChinese)
         {
             return new(
-                recommendation.IsComplete
-                    ? $"建议：{modeDisplayName}"
-                    : $"建议：{modeDisplayName} · 检测中",
+                alreadyApplied
+                    ? "当前已是推荐模式"
+                    : recommendation.IsComplete
+                        ? $"建议：{modeDisplayName}"
+                        : $"建议：{modeDisplayName} · 检测中",
                 visibleReason,
-                "一键应用",
+                alreadyApplied ? "当前模式" : "一键应用",
                 visibleReason);
         }
 
         return new(
-            recommendation.IsComplete
-                ? $"Suggested: {modeDisplayName}"
-                : $"Suggested: {modeDisplayName} · Detecting",
+            alreadyApplied
+                ? "You're on the recommended mode"
+                : recommendation.IsComplete
+                    ? $"Suggested: {modeDisplayName}"
+                    : $"Suggested: {modeDisplayName} · Detecting",
             visibleReason,
-            "Apply",
+            alreadyApplied ? "Current mode" : "Apply",
             visibleReason);
     }
 

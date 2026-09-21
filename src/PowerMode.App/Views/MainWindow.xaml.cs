@@ -66,9 +66,7 @@ public sealed partial class MainWindow : Window
         _startupCoordinator = new StartupCoordinator(
             _lastOperationStore,
             _powerModeBackend,
-            (load, token) => _settingsActivationCoordinator.ActivateAsync(
-                SettingsActivationPolicy.For(load.State),
-                token),
+            ActivateSettingsOnUIThreadAsync,
             _startupMutationGate);
         _recoveredSettingsActivationFlow = new RecoveredSettingsActivationFlow(
             AcceptRecoveredSettingsState,
@@ -85,6 +83,48 @@ public sealed partial class MainWindow : Window
         ApplyLanguage();
         InitializeFeatures();
         Activated += MainWindow_Activated;
+    }
+
+    /// <summary>
+    /// Pins the whole settings-activation to the UI thread. Its effects create and touch
+    /// XAML (DispatcherTimer, buttons, the recommendation card); the startup coordinator
+    /// reaches this on a thread-pool thread via ConfigureAwait(false), which otherwise makes
+    /// those effects throw COMException 0x8001010E. SettingsActivationCoordinator.ActivateAsync
+    /// drops ConfigureAwait(false) so its own continuations stay on the UI thread too.
+    /// </summary>
+    private Task ActivateSettingsOnUIThreadAsync(
+        SettingsLoadResult load,
+        CancellationToken token)
+    {
+        if (DispatcherQueue.HasThreadAccess)
+            return _settingsActivationCoordinator.ActivateAsync(
+                SettingsActivationPolicy.For(load.State),
+                token);
+
+        var completion = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                await _settingsActivationCoordinator.ActivateAsync(
+                    SettingsActivationPolicy.For(load.State),
+                    token);
+                completion.TrySetResult(null);
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        }))
+        {
+            // Dispatcher is shutting down; run inline so activation errors still surface.
+            return _settingsActivationCoordinator.ActivateAsync(
+                SettingsActivationPolicy.For(load.State),
+                token);
+        }
+
+        return completion.Task;
     }
 
     private bool _firstActivation = true;
