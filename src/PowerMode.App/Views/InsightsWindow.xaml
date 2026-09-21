@@ -41,7 +41,7 @@
                     </Border>
                 </Grid>
             </TabViewItem>
-            <TabViewItem x:Name="HistoryTab" Header="切换历史" IsClosable="False"><ListView x:Name="HistoryList" Padding="8"/></TabViewItem>
+            <TabViewItem x:Name="HistoryTab" Header="切换历史" IsClosable="False"><StackPanel><TextBlock x:Name="HistorySummaryText" TextWrapping="Wrap" Padding="12,12,12,0" Foreground="{ThemeResource TextFillColorSecondaryBrush}" AutomationProperties.LiveSetting="Polite"/><TextBlock x:Name="HistoryTriggerText" TextWrapping="Wrap" Padding="12,4,12,0" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><ListView x:Name="HistoryList" Padding="8"/></StackPanel></TabViewItem>
             <TabViewItem x:Name="BatteryTab" Header="电池健康" IsClosable="False"><ScrollViewer><StackPanel Padding="16" Spacing="10"><TextBlock x:Name="BatteryDetails" TextWrapping="Wrap"/><Button x:Name="BatteryReportButton" Content="生成 Windows 电池报告" HorizontalAlignment="Left" Click="BatteryReportButton_Click"/></StackPanel></ScrollViewer></TabViewItem>
         </TabView>
         </Grid>

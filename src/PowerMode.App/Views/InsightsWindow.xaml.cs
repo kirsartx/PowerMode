@@ -237,6 +237,16 @@ public sealed partial class InsightsWindow : Window
             HistoryList.ItemsSource = history.Count == 0
                 ? [_isChinese ? "暂无切换记录" : "No switching history yet"]
                 : history.Select(FormatHistoryEntry).ToArray();
+            string Label(string mode) => mode.ToLowerInvariant() switch
+            {
+                "remote" => _isChinese ? "远程推荐" : "Remote",
+                "saver" => _isChinese ? "低功耗" : "Saver",
+                "balanced" => _isChinese ? "平衡" : "Balanced",
+                "high" => _isChinese ? "高性能" : "High",
+                _ => mode
+            };
+            HistorySummaryText.Text = SwitchHistorySummary.Build(history, _isChinese, Label);
+            HistoryTriggerText.Text = SwitchHistorySummary.BuildTriggerSummary(history, _isChinese);
         }
         catch (Exception ex)
         {
