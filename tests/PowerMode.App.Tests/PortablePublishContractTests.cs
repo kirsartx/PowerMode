@@ -465,8 +465,6 @@ internal static class PowerShellAstAssertions
         await File.WriteAllTextAsync(helperPath, command, Encoding.Unicode);
         try
         {
-            var invocation = $"& '{helperPath.Replace("'", "''", StringComparison.Ordinal)}'";
-            var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(invocation));
             var startInfo = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
@@ -480,8 +478,8 @@ internal static class PowerShellAstAssertions
             startInfo.ArgumentList.Add("-NonInteractive");
             startInfo.ArgumentList.Add("-ExecutionPolicy");
             startInfo.ArgumentList.Add("Bypass");
-            startInfo.ArgumentList.Add("-EncodedCommand");
-            startInfo.ArgumentList.Add(encodedCommand);
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(helperPath);
 
             using var process = new Process { StartInfo = startInfo };
             if (!process.Start())

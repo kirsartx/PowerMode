@@ -19,6 +19,8 @@ internal sealed class PowerStateRevisionGate
 
     public void EndMutation()
     {
+        // Reads captured while a write was active may contain intermediate state.
+        Interlocked.Increment(ref _revision);
         if (Interlocked.Decrement(ref _activeMutations) < 0)
             throw new InvalidOperationException("Mutation lifecycle ended without a matching begin.");
     }

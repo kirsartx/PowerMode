@@ -68,7 +68,8 @@ public sealed class PowerStateRevisionGateTests
         gate.EndMutation();
 
         Assert.False(gate.MutationInProgress);
-        Assert.True(gate.CanApply(captured, mutationInProgress: false));
+        Assert.False(gate.CanApply(captured, mutationInProgress: false));
+        Assert.True(gate.CanApply(gate.BeginRead(), mutationInProgress: false));
     }
 
     [Fact]
