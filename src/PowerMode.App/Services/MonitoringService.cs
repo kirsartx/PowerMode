@@ -587,7 +587,7 @@ public sealed class MonitoringService : IMonitoringSnapshotSource, IAsyncDisposa
             return;
         _disposed = true;
         await StopMonitoringAsync().ConfigureAwait(false);
-        _sampleLifetimeCancellation.Cancel();
+        await _sampleLifetimeCancellation.CancelAsync().ConfigureAwait(false);
         Task<PowerTelemetrySample>? sampleTask;
         lock (_sampleSync)
             sampleTask = _inFlightSample;

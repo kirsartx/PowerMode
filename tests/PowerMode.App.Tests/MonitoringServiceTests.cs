@@ -249,6 +249,38 @@ public sealed class MonitoringServiceTests
     }
 
     [Fact]
+    public async Task DisposeAsync_DoesNotBlockCallerOnProbeCancellationCallback()
+    {
+        using var release = new ManualResetEventSlim();
+        var runner = new CountingProbeRunner { BlockNvidia = true, CancellationRelease = release };
+        var service = CreateService(runner);
+        service.UpdateCapabilities(Capabilities(
+            battery: CapabilitySupport.Unsupported,
+            nvidiaGpu: CapabilitySupport.Supported,
+            nvidiaSmi: CapabilitySupport.Supported,
+            temperature: CapabilitySupport.Unsupported));
+        var sample = service.SampleAsync();
+        await runner.NvidiaStarted.WaitAsync(TimeSpan.FromSeconds(2));
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispose = Task.Run(async () =>
+        {
+            var pending = service.DisposeAsync();
+            returned.SetResult();
+            await pending;
+        });
+        try
+        {
+            await returned.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            release.Set();
+            await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sample);
+        }
+    }
+
+    [Fact]
     public async Task GenerateBatteryReportAsync_UnsupportedOrNoBattery_RejectsBeforeRunner()
     {
         var runner = new CountingProbeRunner();
@@ -339,6 +371,7 @@ public sealed class MonitoringServiceTests
         private int _batteryReportCalls;
 
         public bool BlockNvidia { get; init; }
+        public ManualResetEventSlim? CancellationRelease { get; init; }
         public BatteryHealthTelemetry BatteryHealthResult { get; init; } =
             new(50_000, 45_000, 90, 100);
         public int NvidiaCalls => Volatile.Read(ref _nvidiaCalls);
@@ -353,6 +386,7 @@ public sealed class MonitoringServiceTests
 
         public async Task<NvidiaTelemetry?> QueryNvidiaAsync(CancellationToken token)
         {
+            using var registration = token.Register(() => CancellationRelease?.Wait());
             Interlocked.Increment(ref _nvidiaCalls);
             _nvidiaStarted.TrySetResult();
             if (BlockNvidia)
