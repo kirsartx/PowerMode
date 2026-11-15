@@ -211,7 +211,7 @@ if ($forbiddenFiles.Count -gt 0) {
 }
 
 $buildInfo = [ordered]@{
-    version = "1.1.0"
+    version = "1.1.1"
     productVersion = $productVersion
     commit = $commit
     dirty = $dirty
