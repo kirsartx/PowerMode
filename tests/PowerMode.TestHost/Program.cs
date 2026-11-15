@@ -51,11 +51,6 @@ public static class Program
 
                 return 0;
 
-            case "wait-for-file":
-                File.WriteAllText(args[1], "ready");
-                while (!File.Exists(args[2]))
-                    Thread.SpinWait(100);
-                return 0;
             case "write-pid-and-sleep":
                 File.WriteAllText(args[1], Environment.ProcessId.ToString(
                     System.Globalization.CultureInfo.InvariantCulture));

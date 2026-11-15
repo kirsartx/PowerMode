@@ -33,6 +33,13 @@ internal interface IProcessRunner
         CancellationToken cancellationToken = default);
 }
 
+internal enum ProcessCompletionKind
+{
+    Exited,
+    TimedOut,
+    Cancelled
+}
+
 internal sealed class ProcessRunner : IProcessRunner
 {
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
@@ -106,8 +113,9 @@ internal sealed class ProcessRunner : IProcessRunner
                     cancellation)
                 .ConfigureAwait(false);
 
-            var timedOut = completed == timeout;
-            var cancelled = completed == cancellation;
+            var completion = ClassifyCompletion(completed, processExit, cancellation);
+            var timedOut = completion == ProcessCompletionKind.TimedOut;
+            var cancelled = completion == ProcessCompletionKind.Cancelled;
             if (timedOut || cancelled)
             {
                 TryKillProcessTree(process);
@@ -223,6 +231,16 @@ internal sealed class ProcessRunner : IProcessRunner
             return string.Empty;
         }
     }
+
+    internal static ProcessCompletionKind ClassifyCompletion(
+        Task completed,
+        Task processExit,
+        Task cancellation) =>
+        completed == processExit
+            ? ProcessCompletionKind.Exited
+            : completed == cancellation
+                ? ProcessCompletionKind.Cancelled
+                : ProcessCompletionKind.TimedOut;
 
     private static void TryKillProcessTree(Process process)
     {

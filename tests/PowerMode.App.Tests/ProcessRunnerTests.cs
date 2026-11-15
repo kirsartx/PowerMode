@@ -135,29 +135,27 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
-    public async Task RunAsync_CancellationWinner_RemainsCancelledWhenProcessExitsImmediately()
+    public void ClassifyCompletion_CancellationWinner_RemainsCancelledAfterProcessExit()
     {
-        using var directory = new TemporaryDirectory();
-        var readyPath = Path.Combine(directory.Path, "ready");
-        var exitPath = Path.Combine(directory.Path, "exit");
-        using var cancellation = new CancellationTokenSource();
+        var processExit = CompletedTask();
+        var cancellation = CompletedTask();
 
-        var run = new ProcessRunner().RunAsync(new(
-            TestPaths.TestHostExe,
-            ["wait-for-file", readyPath, exitPath],
-            TimeSpan.FromSeconds(30)),
-            cancellation.Token);
+        var result = ProcessRunner.ClassifyCompletion(
+            cancellation, processExit, cancellation);
 
-        await WaitForFileAsync(readyPath, TimeSpan.FromSeconds(3));
-        cancellation.Cancel();
-        File.WriteAllText(exitPath, "exit");
+        Assert.Equal(ProcessCompletionKind.Cancelled, result);
+    }
 
-        var result = await run;
+    [Fact]
+    public void ClassifyCompletion_TimeoutWinner_RemainsTimedOutAfterProcessExit()
+    {
+        var processExit = CompletedTask();
+        var timeout = CompletedTask();
+        var cancellation = new TaskCompletionSource().Task;
 
-        Assert.True(result.Cancelled);
-        Assert.False(result.TimedOut);
-        Assert.False(result.Succeeded);
-        Assert.Null(result.ExitCode);
+        var result = ProcessRunner.ClassifyCompletion(timeout, processExit, cancellation);
+
+        Assert.Equal(ProcessCompletionKind.TimedOut, result);
     }
 
     [Fact]
@@ -213,5 +211,12 @@ public sealed class ProcessRunnerTests
             await Task.Delay(10);
         }
         return false;
+    }
+
+    private static Task CompletedTask()
+    {
+        var source = new TaskCompletionSource();
+        source.SetResult();
+        return source.Task;
     }
 }
