@@ -15,7 +15,7 @@ set "NEED_BUILD=0"
 
 if not exist "%APP%" set "NEED_BUILD=1"
 if not exist "%STAMP%" set "NEED_BUILD=1"
-if exist "%APP%" if exist "%STAMP%" for /f %%I in ('powershell -NoProfile -Command "$stamp=(Get-Item -LiteralPath '%STAMP%').LastWriteTimeUtc; $inputs=@(Get-ChildItem -LiteralPath '%SOURCE%' -Recurse -File -Include *.cs,*.xaml,*.csproj,*.manifest); $inputs=@($inputs.Where({$_.FullName -notlike '*\bin\*' -and $_.FullName -notlike '*\obj\*'})); $inputs+=Get-Item -LiteralPath '%CLI%','%ENGINE%','%README%'; $newer=$false; foreach($file in $inputs){if($file.LastWriteTimeUtc -gt $stamp){$newer=$true;break}}; if($newer){'1'}else{'0'}"') do set "NEED_BUILD=%%I"
+if exist "%APP%" if exist "%STAMP%" for /f %%I in ('powershell -NoProfile -Command "$stamp=(Get-Item -LiteralPath $env:STAMP).LastWriteTimeUtc; $inputs=@(Get-ChildItem -LiteralPath $env:SOURCE -Recurse -File -Include *.cs,*.xaml,*.csproj,*.manifest); $inputs=@($inputs.Where({$_.FullName -notlike '*\bin\*' -and $_.FullName -notlike '*\obj\*'})); $inputs+=Get-Item -LiteralPath $env:CLI,$env:ENGINE,$env:README; $newer=$false; foreach($file in $inputs){if($file.LastWriteTimeUtc -gt $stamp){$newer=$true;break}}; if($newer){'1'}else{'0'}"') do set "NEED_BUILD=%%I"
 
 if "%NEED_BUILD%"=="1" (
     powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Publish-Portable.ps1" -Root "%ROOT%"

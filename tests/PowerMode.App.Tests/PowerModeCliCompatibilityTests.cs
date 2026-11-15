@@ -69,6 +69,61 @@ public sealed class PowerModeCliCompatibilityTests
         Assert.Contains("Open the interactive menu", result.StandardOutput, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("PowerModeSwitcher.bat")]
+    [InlineData("PowerMode.Engine.ps1")]
+    public async Task LaunchPortable_RebuildsWhenCliInputIsNewerUnderQuotedRoot(
+        string newerCliInput)
+    {
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "PowerMode's workspace");
+        var scripts = Path.Combine(root, "scripts");
+        var cli = Path.Combine(root, "src", "PowerMode.Cli");
+        var appSource = Path.Combine(root, "src", "PowerMode.App");
+        var output = Path.Combine(root, "dist", "PowerMode-win-x64");
+        var app = Path.Combine(output, "App");
+        var marker = Path.Combine(root, "publish-ran.marker");
+
+        Directory.CreateDirectory(scripts);
+        Directory.CreateDirectory(cli);
+        Directory.CreateDirectory(appSource);
+        Directory.CreateDirectory(app);
+        File.Copy(TestPaths.Repo("scripts", "Launch-PowerMode.bat"),
+            Path.Combine(scripts, "Launch-PowerMode.bat"));
+        File.Copy(Path.Combine(Environment.SystemDirectory, "where.exe"),
+            Path.Combine(app, "PowerMode.exe"));
+
+        var sourceProject = Path.Combine(appSource, "PowerMode.App.csproj");
+        var bat = Path.Combine(cli, "PowerModeSwitcher.bat");
+        var engine = Path.Combine(cli, "PowerMode.Engine.ps1");
+        var readme = Path.Combine(root, "README.md");
+        var stamp = Path.Combine(output, "build-info.json");
+        File.WriteAllText(sourceProject, "<Project />");
+        File.WriteAllText(bat, "@echo off");
+        File.WriteAllText(engine, "# test engine");
+        File.WriteAllText(readme, "test");
+        File.WriteAllText(stamp, "{}");
+        File.WriteAllText(Path.Combine(scripts, "Publish-Portable.ps1"),
+            "[System.IO.File]::WriteAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'publish-ran.marker'), 'ran')");
+
+        var stampTime = DateTime.UtcNow.AddMinutes(-2);
+        foreach (var input in new[] { sourceProject, bat, engine, readme })
+            File.SetLastWriteTimeUtc(input, stampTime.AddMinutes(-1));
+        File.SetLastWriteTimeUtc(Path.Combine(cli, newerCliInput), stampTime.AddMinutes(1));
+        File.SetLastWriteTimeUtc(stamp, stampTime);
+
+        var result = await new ProcessRunner().RunAsync(new(
+            "cmd.exe",
+            ["/d", "/c", Path.Combine(scripts, "Launch-PowerMode.bat")],
+            TimeSpan.FromSeconds(15)));
+
+        Assert.True(result.Succeeded,
+            $"Launch failed: {result.StandardError}{Environment.NewLine}{result.StandardOutput}");
+        Assert.True(File.Exists(marker),
+            $"A newer {newerCliInput} must trigger Publish-Portable.ps1. " +
+            $"Standard error: {result.StandardError}");
+    }
+
     [Fact]
     public async Task RootLauncher_Help_ForwardsToEngine()
     {
