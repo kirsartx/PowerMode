@@ -36,6 +36,8 @@ internal interface IProcessRunner
 internal sealed class ProcessRunner : IProcessRunner
 {
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaximumSupportedTimeout =
+        TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
     public async Task<ProcessExecutionResult> RunAsync(
         ProcessExecutionRequest request,
@@ -175,12 +177,12 @@ internal sealed class ProcessRunner : IProcessRunner
 
     private static void ValidateTimeout(TimeSpan timeout)
     {
-        if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+        if (timeout <= TimeSpan.Zero || timeout > MaximumSupportedTimeout)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(timeout),
                 timeout,
-                "The process timeout must be finite and positive.");
+                "The process timeout must be finite, positive, and supported by Task.Delay.");
         }
     }
 

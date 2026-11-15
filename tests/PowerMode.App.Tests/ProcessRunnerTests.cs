@@ -135,6 +135,65 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_CancellationWinner_RemainsCancelledWhenProcessExitsImmediately()
+    {
+        using var directory = new TemporaryDirectory();
+        var readyPath = Path.Combine(directory.Path, "ready");
+        var exitPath = Path.Combine(directory.Path, "exit");
+        using var cancellation = new CancellationTokenSource();
+
+        var run = new ProcessRunner().RunAsync(new(
+            TestPaths.TestHostExe,
+            ["wait-for-file", readyPath, exitPath],
+            TimeSpan.FromSeconds(30)),
+            cancellation.Token);
+
+        await WaitForFileAsync(readyPath, TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        File.WriteAllText(exitPath, "exit");
+
+        var result = await run;
+
+        Assert.True(result.Cancelled);
+        Assert.False(result.TimedOut);
+        Assert.False(result.Succeeded);
+        Assert.Null(result.ExitCode);
+    }
+
+    [Fact]
+    public async Task RunAsync_MaximumTimeout_IsRejectedBeforeProcessStarts()
+    {
+        using var directory = new TemporaryDirectory();
+        var processIdPath = Path.Combine(directory.Path, "pid");
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            new ProcessRunner().RunAsync(new(
+                TestPaths.TestHostExe,
+                ["write-pid-and-sleep", processIdPath, "30000"],
+                TimeSpan.MaxValue)));
+
+        try
+        {
+            Assert.False(await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(1)));
+        }
+        finally
+        {
+            if (File.Exists(processIdPath))
+            {
+                var processId = int.Parse(await File.ReadAllTextAsync(processIdPath));
+                try
+                {
+                    using var process = Process.GetProcessById(processId);
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (ArgumentException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_RequiresFinitePositiveTimeout()
     {
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
@@ -142,5 +201,17 @@ public sealed class ProcessRunnerTests
                 TestPaths.TestHostExe,
                 ["exit", "0"],
                 Timeout.InfiniteTimeSpan)));
+    }
+
+    private static async Task<bool> WaitForFileAsync(string path, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            if (File.Exists(path))
+                return true;
+            await Task.Delay(10);
+        }
+        return false;
     }
 }
