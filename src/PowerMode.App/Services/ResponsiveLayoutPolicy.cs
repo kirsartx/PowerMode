@@ -117,6 +117,7 @@ internal static class ResponsiveLayoutPolicy
     public const double MinimumHeight = 560;
     public const double MediumMinimumWidth = 760;
     public const double WideMinimumWidth = 1040;
+    public const double VerticalScrollMinimumHeight = 700;
 
     // The layout depends only on (tier, experienceMode): 3 x 2 combinations. Resize fires
     // SizeChanged continuously, so memoize to avoid rebuilding the toolbar dictionary each pass.
@@ -301,7 +302,8 @@ internal static class ResponsiveLayoutPolicy
             1,
             (visibleCards.Count + layout.StatusCardColumns - 1) /
                 layout.StatusCardColumns);
-        var enableVerticalScroll = layout.Tier != LayoutTier.Wide;
+        var enableVerticalScroll = layout.Tier != LayoutTier.Wide ||
+            logicalHeight < VerticalScrollMinimumHeight;
         var professional = experienceMode == ExperienceMode.Professional;
         var modeButtonColumns = professional && layout.Tier == LayoutTier.Wide
             ? 1

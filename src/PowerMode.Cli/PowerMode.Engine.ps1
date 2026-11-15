@@ -66,6 +66,15 @@ function Get-Text {
         SwitchedBalanced = '已切换到平衡模式。亮度：{0}%。'
         SwitchedHigh = '已切换到高性能模式。亮度：{0}%。'
         CurrentMode = '当前模式'
+        StatusPowerTitle = '供电与硬件'
+        StatusPolicyTitle = '电源策略（插电 / 电池）'
+        StatusAcDc = '插电 {0} / 电池 {1}'
+        TimeoutNever = '永不'
+        TimeoutNA = '不可用'
+        TimeoutDay = '天'
+        TimeoutHour = '小时'
+        TimeoutMinute = '分'
+        TimeoutSecond = '秒'
         DgpuPower = '独显功耗'
         Power = '供电'
         PowerBattery = '电池'
@@ -85,6 +94,8 @@ function Get-Text {
         PowerSource = ' 供电状态       : '
         RemoteSafety = ' 远程保护       : 永不睡眠 / 永不休眠'
         ChooseMode = ' 选择模式'
+        MenuModesTitle = ' 电源模式'
+        MenuToolsTitle = ' 状态与工具'
         MenuRemote = '远程推荐'
         MenuRemoteHint = 'CPU 32%，亮度 50%，1 分钟关屏'
         MenuCustom = '远程自定义 CPU'
@@ -109,14 +120,15 @@ function Get-Text {
         MenuExitHint = '关闭工具'
         Select = '选择'
         CpuPrompt = 'CPU 上限百分比，20-50（回车 = {0}）'
-        InvalidNumber = '输入不是数字，使用默认值。'
         WifiConfirm1 = '这会尝试禁用启用中的 WiFi 适配器。'
         WifiConfirm2 = '仅在已插网线、远程连接不依赖 WiFi 时使用。'
         WifiConfirmPrompt = '输入 YES 继续'
         WifiCanceled = '已取消，WiFi 未修改。'
         PauseMenu = '按回车返回菜单'
-        UnknownChoice = '无法识别。请输入 1-9、L、0，或模式名称。'
+        UnknownChoice = '无法识别。请输入菜单编号、L、0，或模式名称（remote / saver / balanced / high）。'
+        InvalidCpuNumber = '请输入 20-50 之间的整数，或直接回车使用默认值。'
         UsageTitle = 'PowerMode（Hermes 远程低功耗优化）：'
+        UsageInteractive = '  PowerModeSwitcher                           - 打开交互菜单'
         UsageStatus = '  PowerModeSwitcher status'
         UsageVerify = '  PowerModeSwitcher verify                   - 校验当前模式关键设置'
         UsageRemote = '  PowerModeSwitcher remote [20-50]           - Hermes 远程推荐'
@@ -166,6 +178,15 @@ function Get-Text {
         SwitchedBalanced = 'Switched to BALANCED. Brightness: {0}%.'
         SwitchedHigh = 'Switched to HIGH PERFORMANCE. Brightness: {0}%.'
         CurrentMode = 'Current mode'
+        StatusPowerTitle = 'Power and hardware'
+        StatusPolicyTitle = 'Power policy (AC / battery)'
+        StatusAcDc = 'AC {0} / Battery {1}'
+        TimeoutNever = 'Never'
+        TimeoutNA = 'N/A'
+        TimeoutDay = 'd'
+        TimeoutHour = 'h'
+        TimeoutMinute = 'm'
+        TimeoutSecond = 's'
         DgpuPower = 'dGPU power'
         Power = 'Power'
         PowerBattery = 'Battery'
@@ -185,6 +206,8 @@ function Get-Text {
         PowerSource = ' Power source    : '
         RemoteSafety = ' Remote safety   : Never sleep / never hibernate'
         ChooseMode = ' Choose a mode'
+        MenuModesTitle = ' Power modes'
+        MenuToolsTitle = ' Status and tools'
         MenuRemote = 'Remote recommended'
         MenuRemoteHint = 'CPU 32%, brightness 50%, display off in 1 min'
         MenuCustom = 'Remote custom CPU'
@@ -209,14 +232,15 @@ function Get-Text {
         MenuExitHint = 'Close this tool'
         Select = 'Select'
         CpuPrompt = 'CPU max percent, 20-50 (Enter = {0})'
-        InvalidNumber = 'Invalid number. Using default.'
         WifiConfirm1 = 'This will try to disable active WiFi adapters.'
         WifiConfirm2 = 'Use it only when Ethernet is connected and remote access does not rely on WiFi.'
         WifiConfirmPrompt = 'Type YES to continue'
         WifiCanceled = 'Canceled. WiFi was not changed.'
         PauseMenu = 'Press Enter to return to menu'
-        UnknownChoice = 'Unknown choice. Try 1-9, L, 0, or a mode name.'
+        UnknownChoice = 'Unknown choice. Enter a menu number, L, 0, or a mode name (remote / saver / balanced / high).'
+        InvalidCpuNumber = 'Enter a whole number from 20 to 50, or press Enter for the default.'
         UsageTitle = 'PowerMode (Hermes remote optimized):'
+        UsageInteractive = '  PowerModeSwitcher                           - Open the interactive menu'
         UsageStatus = '  PowerModeSwitcher status'
         UsageVerify = '  PowerModeSwitcher verify                   - Check active profile settings'
         UsageRemote = '  PowerModeSwitcher remote [20-50]           - Recommended for remote Hermes'
@@ -257,6 +281,11 @@ function Get-Text {
 }
 
 function Initialize-Config {
+    if ($env:POWERMODE_LANGUAGE -in @('en', 'zh')) {
+        $script:Language = $env:POWERMODE_LANGUAGE
+        return
+    }
+
     try {
         $config = Get-ItemProperty -Path $ConfigRegPath -ErrorAction Stop
         if ($config.Language -in @('en', 'zh')) {
@@ -498,6 +527,25 @@ function Get-DisplayValue {
 
     if ($null -eq $Value) { return 'N/A' }
     return "$Value$Suffix"
+}
+
+function Get-DisplayTimeout {
+    param([Nullable[int]]$Seconds)
+
+    if ($null -eq $Seconds) { return (Get-Text 'TimeoutNA') }
+    if ($Seconds -eq 0) { return (Get-Text 'TimeoutNever') }
+
+    $remaining = [int]$Seconds
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($unit in @(@{ Size = 86400; Key = 'TimeoutDay' }, @{ Size = 3600; Key = 'TimeoutHour' }, @{ Size = 60; Key = 'TimeoutMinute' })) {
+        if ($remaining -ge $unit.Size) {
+            $count = [int][Math]::Floor($remaining / $unit.Size)
+            $parts.Add(('{0}{1}' -f $count, (Get-Text $unit.Key)))
+            $remaining = $remaining % $unit.Size
+        }
+    }
+    if ($remaining -gt 0 -or $parts.Count -eq 0) { $parts.Add(('{0}{1}' -f $remaining, (Get-Text 'TimeoutSecond'))) }
+    return ($parts -join ' ')
 }
 
 function Get-PowerSource {
@@ -762,9 +810,14 @@ function Get-ProfileTag {
 
 function Write-Rule {
     param(
-        [int]$Width = 72,
+        [int]$Width,
         [ConsoleColor]$Color = 'DarkGray'
     )
+
+    if ($Width -le 0) {
+        try { $Width = [Math]::Max(40, [Math]::Min(100, [Console]::WindowWidth - 1)) }
+        catch { $Width = 72 }
+    }
 
     Write-Host ('=' * $Width) -ForegroundColor $Color
 }
@@ -778,8 +831,15 @@ function Write-MenuItem {
     )
 
     Write-Host ('  [{0}] ' -f $Key) -NoNewline -ForegroundColor DarkGray
-    Write-Host $Title.PadRight(24) -NoNewline -ForegroundColor $Color
-    Write-Host $Hint -ForegroundColor DarkGray
+    Write-Host $Title -NoNewline -ForegroundColor $Color
+    Write-Host ('  -  {0}' -f $Hint) -ForegroundColor DarkGray
+}
+
+function Write-MenuSection {
+    param([string]$Title)
+
+    Write-Host ''
+    Write-Host $Title -ForegroundColor Cyan
 }
 
 function Show-Header {
@@ -825,13 +885,17 @@ function Show-Status {
     $hibernateDc = if ($guid) { Get-PowerSettingDcValue $guid SUB_SLEEP HIBERNATEIDLE } else { $null }
 
     Write-Host ("{0}: {1} ({2})" -f (Get-Text 'CurrentMode'), $tag, $plan) -ForegroundColor Cyan
-    Write-Host ("{0} : {1}" -f (Get-Text 'DgpuPower'), (Get-GpuPower))
-    Write-Host ("{0}      : {1}" -f (Get-Text 'Power'), (Get-PowerSource))
-    Write-Host ("{0}    : AC {1} / DC {2}" -f (Get-Text 'CpuMax'), (Get-DisplayValue $cpuAc '%'), (Get-DisplayValue $cpuDc '%'))
-    Write-Host ("{0} : AC {1} / DC {2}" -f (Get-Text 'Brightness'), (Get-DisplayValue $brightnessAc '%'), (Get-DisplayValue $brightnessDc '%'))
-    Write-Host ("{0}: AC {1} / DC {2}" -f (Get-Text 'DisplayOff'), (Get-DisplayValue $displayAc 's'), (Get-DisplayValue $displayDc 's'))
-    Write-Host ("{0}      : AC {1} / DC {2}" -f (Get-Text 'Sleep'), (Get-DisplayValue $sleepAc 's'), (Get-DisplayValue $sleepDc 's'))
-    Write-Host ("{0}  : AC {1} / DC {2}" -f (Get-Text 'Hibernate'), (Get-DisplayValue $hibernateAc 's'), (Get-DisplayValue $hibernateDc 's'))
+    Write-Host ''
+    Write-Host (Get-Text 'StatusPowerTitle') -ForegroundColor Yellow
+    Write-Host ("  {0}: {1}" -f (Get-Text 'Power'), (Get-PowerSource))
+    Write-Host ("  {0}: {1}" -f (Get-Text 'DgpuPower'), (Get-GpuPower))
+    Write-Host ''
+    Write-Host (Get-Text 'StatusPolicyTitle') -ForegroundColor Yellow
+    Write-Host ("  {0}: {1}" -f (Get-Text 'CpuMax'), ((Get-Text 'StatusAcDc') -f (Get-DisplayValue $cpuAc '%'), (Get-DisplayValue $cpuDc '%')))
+    Write-Host ("  {0}: {1}" -f (Get-Text 'Brightness'), ((Get-Text 'StatusAcDc') -f (Get-DisplayValue $brightnessAc '%'), (Get-DisplayValue $brightnessDc '%')))
+    Write-Host ("  {0}: {1}" -f (Get-Text 'DisplayOff'), ((Get-Text 'StatusAcDc') -f (Get-DisplayTimeout $displayAc), (Get-DisplayTimeout $displayDc)))
+    Write-Host ("  {0}: {1}" -f (Get-Text 'Sleep'), ((Get-Text 'StatusAcDc') -f (Get-DisplayTimeout $sleepAc), (Get-DisplayTimeout $sleepDc)))
+    Write-Host ("  {0}: {1}" -f (Get-Text 'Hibernate'), ((Get-Text 'StatusAcDc') -f (Get-DisplayTimeout $hibernateAc), (Get-DisplayTimeout $hibernateDc)))
     Write-Host ''
     Write-Host (Get-Text 'Tip') -ForegroundColor DarkGray
 }
@@ -921,6 +985,7 @@ function Test-CurrentProfile {
 
 function Show-Usage {
     Write-Host (Get-Text 'UsageTitle')
+    Write-Host (Get-Text 'UsageInteractive')
     Write-Host (Get-Text 'UsageStatus')
     Write-Host (Get-Text 'UsageVerify')
     Write-Host (Get-Text 'UsageRemote')
@@ -951,18 +1016,19 @@ function Read-CpuPercent {
         [int]$Default = 32
     )
 
-    $inputValue = Read-Host ((Get-Text 'CpuPrompt') -f $Default)
-    if ([string]::IsNullOrWhiteSpace($inputValue)) {
-        return $Default
-    }
+    while ($true) {
+        $inputValue = Read-Host ((Get-Text 'CpuPrompt') -f $Default)
+        if ([string]::IsNullOrWhiteSpace($inputValue)) {
+            return $Default
+        }
 
-    $parsed = 0
-    if ([int]::TryParse($inputValue.Trim(), [ref]$parsed)) {
-        return (Limit-CpuMax -Value $parsed -Default $Default)
-    }
+        $parsed = 0
+        if ([int]::TryParse($inputValue.Trim(), [ref]$parsed) -and $parsed -ge 20 -and $parsed -le 50) {
+            return $parsed
+        }
 
-    Write-Host (Get-Text 'InvalidNumber') -ForegroundColor Yellow
-    return $Default
+        Write-Host (Get-Text 'InvalidCpuNumber') -ForegroundColor Yellow
+    }
 }
 
 function Confirm-WiFiDisable {
@@ -982,12 +1048,14 @@ function Show-Menu {
     while ($true) {
         Show-Header
         Write-Host (Get-Text 'ChooseMode') -ForegroundColor White
+        Write-MenuSection (Get-Text 'MenuModesTitle')
         Write-MenuItem 1 (Get-Text 'MenuRemote') (Get-Text 'MenuRemoteHint') Green
         Write-MenuItem 2 (Get-Text 'MenuCustom') (Get-Text 'MenuCustomHint') Green
         Write-MenuItem 3 (Get-Text 'MenuNoWifi') (Get-Text 'MenuNoWifiHint') Yellow
         Write-MenuItem 4 (Get-Text 'MenuSaver') (Get-Text 'MenuSaverHint') Green
         Write-MenuItem 5 (Get-Text 'MenuBalanced') (Get-Text 'MenuBalancedHint') Yellow
         Write-MenuItem 6 (Get-Text 'MenuHigh') (Get-Text 'MenuHighHint') Red
+        Write-MenuSection (Get-Text 'MenuToolsTitle')
         Write-MenuItem 7 (Get-Text 'MenuRefresh') (Get-Text 'MenuRefreshHint') Cyan
         Write-MenuItem 8 (Get-Text 'MenuVerify') (Get-Text 'MenuVerifyHint') Cyan
         Write-MenuItem 9 (Get-Text 'MenuHelp') (Get-Text 'MenuHelpHint') Cyan

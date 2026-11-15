@@ -66,6 +66,65 @@ public sealed class PowerModeCliCompatibilityTests
         Assert.Contains("remote", result.StandardOutput, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("balanced", result.StandardOutput, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("high", result.StandardOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Open the interactive menu", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RootLauncher_Help_ForwardsToEngine()
+    {
+        var result = await RunRootBatAsync("help");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("remote", result.StandardOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Open the interactive menu", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RootLauncher_ExitsWhenCliScriptIsMissing()
+    {
+        using var directory = new TemporaryDirectory();
+        var launcherPath = Path.Combine(directory.Path, "PowerModeSwitcher.bat");
+        File.WriteAllText(
+            launcherPath,
+            File.ReadAllText(TestPaths.Repo("PowerModeSwitcher.bat")));
+
+        var result = await new ProcessRunner().RunAsync(new(
+            "cmd.exe",
+            ["/d", "/c", launcherPath],
+            TimeSpan.FromSeconds(15)));
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("PowerMode CLI was not found:", result.StandardError);
+        Assert.DoesNotContain("PowerMode.Engine.ps1", result.StandardError);
+    }
+
+    [Fact]
+    public async Task Engine_TextStatus_FormatsTimeoutsAndGroupsSections()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        await File.WriteAllTextAsync(
+            state.Path,
+            """
+            {
+              "activeSchemeId": "381b4222-f694-41f0-9685-ff5bb260df2e",
+              "wifiDisabled": false,
+              "values": {
+                "381b4222-f694-41f0-9685-ff5bb260df2e|sub_video|videoidle|ac": 90,
+                "381b4222-f694-41f0-9685-ff5bb260df2e|sub_video|videoidle|dc": 0,
+                "381b4222-f694-41f0-9685-ff5bb260df2e|sub_sleep|standbyidle|ac": 3661,
+                "381b4222-f694-41f0-9685-ff5bb260df2e|sub_sleep|standbyidle|dc": 7200
+              }
+            }
+            """);
+
+        var result = await RunEngineAsync(state, "-Mode", "status");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.DoesNotContain("\"schemaVersion\"", result.StandardOutput);
+        Assert.Contains("Power and hardware", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("Power policy (AC / battery)", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("AC 1m 30s / Battery Never", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("AC 1h 1m 1s / Battery 2h", result.StandardOutput, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -285,10 +344,19 @@ public sealed class PowerModeCliCompatibilityTests
     }
 
     private static Task<ProcessExecutionResult> RunBatAsync(
+        params string[] arguments) =>
+        RunLauncherAsync(
+            TestPaths.Repo("src", "PowerMode.Cli", "PowerModeSwitcher.bat"),
+            arguments);
+
+    private static Task<ProcessExecutionResult> RunRootBatAsync(
+        params string[] arguments) =>
+        RunLauncherAsync(TestPaths.Repo("PowerModeSwitcher.bat"), arguments);
+
+    private static Task<ProcessExecutionResult> RunLauncherAsync(
+        string batPath,
         params string[] arguments)
     {
-        var batPath = TestPaths.Repo(
-            "src", "PowerMode.Cli", "PowerModeSwitcher.bat");
         return new ProcessRunner().RunAsync(new(
             "cmd.exe",
             ["/d", "/c", batPath, .. arguments],
@@ -296,7 +364,8 @@ public sealed class PowerModeCliCompatibilityTests
             TestPaths.RepositoryRoot,
             new Dictionary<string, string?>
             {
-                ["PM_NO_PAUSE"] = "1"
+                ["PM_NO_PAUSE"] = "1",
+                ["POWERMODE_LANGUAGE"] = "en"
             }));
     }
 
@@ -320,7 +389,8 @@ public sealed class PowerModeCliCompatibilityTests
             {
                 ["POWERMODE_POWERCFG_PATH"] = TestPaths.TestHostExe,
                 ["POWERMODE_TEST_POWER_STATE"] = state.Path,
-                ["POWERMODE_TEST_FAIL_SETTING"] = state.FailSetting
+                ["POWERMODE_TEST_FAIL_SETTING"] = state.FailSetting,
+                ["POWERMODE_LANGUAGE"] = "en"
             });
         return new ProcessRunner().RunAsync(request);
     }

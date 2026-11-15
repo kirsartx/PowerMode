@@ -11,6 +11,7 @@ public sealed class ResponsiveLayoutPolicyTests
         Assert.Equal(560, ResponsiveLayoutPolicy.MinimumHeight);
         Assert.Equal(760, ResponsiveLayoutPolicy.MediumMinimumWidth);
         Assert.Equal(1040, ResponsiveLayoutPolicy.WideMinimumWidth);
+        Assert.Equal(700, ResponsiveLayoutPolicy.VerticalScrollMinimumHeight);
         Assert.Equal(1120, ResponsiveLayoutPolicy.DefaultWidth);
         Assert.Equal(760, ResponsiveLayoutPolicy.DefaultHeight);
     }
@@ -179,6 +180,28 @@ public sealed class ResponsiveLayoutPolicyTests
         Assert.Equal(
             [GridLengthProjection.Auto, GridLengthProjection.Fixed(0)],
             projection.MainRows);
+    }
+
+    [Theory]
+    [InlineData(699, true)]
+    [InlineData(700, false)]
+    public void Project_WideEnablesVerticalScrollBelowMinimumHeight(
+        double height,
+        bool enableVerticalScroll)
+    {
+        var projection = ResponsiveLayoutPolicy.Project(
+            ResponsiveLayoutPolicy.WideMinimumWidth,
+            height,
+            ExperienceMode.Professional,
+            Enum.GetValues<StatusCardId>());
+
+        Assert.Equal(LayoutTier.Wide, projection.Layout.Tier);
+        Assert.Equal(enableVerticalScroll, projection.EnableVerticalContentScroll);
+        Assert.Equal(
+            enableVerticalScroll
+                ? [GridLengthProjection.Auto, GridLengthProjection.Auto]
+                : [GridLengthProjection.Auto, GridLengthProjection.Star],
+            projection.ContentRows);
     }
 
     [Theory]
