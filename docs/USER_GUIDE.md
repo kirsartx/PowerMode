@@ -156,6 +156,8 @@ CLI 与 GUI 共用 `PowerModeSwitcher.bat`（便携包根目录或源码 `src\Po
 .\PowerModeSwitcher.bat verify
 ```
 
+远程和低功耗会核对 CPU 上限是否在 `20–50%`、交流与直流是否一致，并用 CPU 下限（远程 5、低功耗 3）区分两者。平衡与高性能仍核对 CPU 上限 100%。亮度、睡眠和休眠一并核对。
+
 ### 远程推荐
 
 ```bat

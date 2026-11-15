@@ -51,6 +51,20 @@ internal static class FlyoutWindowPolicy
 
     public static bool ShouldAutoHide(bool isPinned, bool foregroundBelongsToApp) =>
         !isPinned && !foregroundBelongsToApp;
+
+    /// <summary>
+    /// A deactivate handler waits briefly before hiding. A newer activation bumps the
+    /// generation, so a stale wait must not hide a flyout the user has focused again.
+    /// </summary>
+    public static bool ShouldCompleteAutoHide(
+        int scheduledGeneration,
+        int currentGeneration,
+        bool isPinned,
+        bool isVisible,
+        bool foregroundBelongsToApp) =>
+        scheduledGeneration == currentGeneration &&
+        isVisible &&
+        ShouldAutoHide(isPinned, foregroundBelongsToApp);
 }
 
 internal enum TrayClickAction

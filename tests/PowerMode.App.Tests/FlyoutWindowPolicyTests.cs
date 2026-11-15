@@ -106,6 +106,30 @@ public sealed class FlyoutWindowPolicyTests
     }
 
     [Theory]
+    [InlineData(1, 1, false, true, false, true)]
+    [InlineData(1, 2, false, true, false, false)]
+    [InlineData(1, 1, true, true, false, false)]
+    [InlineData(1, 1, false, false, false, false)]
+    [InlineData(1, 1, false, true, true, false)]
+    public void ShouldCompleteAutoHide_IgnoresStaleDeactivation(
+        int scheduledGeneration,
+        int currentGeneration,
+        bool isPinned,
+        bool isVisible,
+        bool foregroundBelongsToApp,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            FlyoutWindowPolicy.ShouldCompleteAutoHide(
+                scheduledGeneration,
+                currentGeneration,
+                isPinned,
+                isVisible,
+                foregroundBelongsToApp));
+    }
+
+    [Theory]
     [InlineData(false, false, true)]
     [InlineData(false, true, false)]
     [InlineData(true, false, false)]

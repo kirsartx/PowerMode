@@ -64,16 +64,17 @@ internal sealed class NativePowerStateReader
 
         var cpuMaxAc = ReadAc(scheme, CpuSubgroup, CpuMaximum);
         var cpuMaxDc = ReadDc(scheme, CpuSubgroup, CpuMaximum);
+        var cpuMinAc = ReadAc(scheme, CpuSubgroup, CpuMinimum);
 
         return new PowerModeState(
             ActiveSchemeId: scheme,
             ActiveSchemeName: DescribeScheme(scheme),
-            DetectedMode: DetectMode(scheme, cpuMaxAc),
+            DetectedMode: DetectMode(scheme, cpuMaxAc, cpuMinAc),
             PowerSource: _api.ReadPowerSource(),
             DiscreteGpuPowerWatts: null,
             CpuMaximumAcPercent: cpuMaxAc,
             CpuMaximumDcPercent: cpuMaxDc,
-            CpuMinimumAcPercent: ReadAc(scheme, CpuSubgroup, CpuMinimum),
+            CpuMinimumAcPercent: cpuMinAc,
             CpuMinimumDcPercent: ReadDc(scheme, CpuSubgroup, CpuMinimum),
             ProcessorBoostModeAc: ReadAc(scheme, CpuSubgroup, BoostMode),
             ProcessorBoostModeDc: ReadDc(scheme, CpuSubgroup, BoostMode),
@@ -102,15 +103,31 @@ internal sealed class NativePowerStateReader
         return $"Unknown ({scheme:D})";
     }
 
-    internal static PowerModePreset? DetectMode(Guid scheme, int? cpuMaxAc) => scheme switch
+    /// <summary>
+    /// Remote and Saver share the Power Saver scheme. Saver writes CPU minimum 3 and
+    /// Remote writes 5, which stays distinct across the shared 20–50 maximum range.
+    /// When the minimum cannot be read, fall back to the historical maximum threshold.
+    /// Keep in sync with Resolve-SaverFamilyMode in PowerMode.Engine.ps1.
+    /// </summary>
+    internal static PowerModePreset? DetectMode(Guid scheme, int? cpuMaxAc, int? cpuMinAc = null) =>
+        scheme switch
+        {
+            var s when s == SchemeSaver => ClassifySaverScheme(cpuMinAc, cpuMaxAc),
+            var s when s == SchemeBalanced => PowerModePreset.Balanced,
+            var s when s == SchemeHigh => PowerModePreset.High,
+            _ => null
+        };
+
+    private static PowerModePreset ClassifySaverScheme(int? cpuMinAc, int? cpuMaxAc)
     {
-        var s when s == SchemeSaver => cpuMaxAc is { } cpu && cpu <= 30
+        if (cpuMinAc == 3)
+            return PowerModePreset.Saver;
+        if (cpuMinAc is not null)
+            return PowerModePreset.Remote;
+        return cpuMaxAc is { } cpu && cpu <= 30
             ? PowerModePreset.Saver
-            : PowerModePreset.Remote,
-        var s when s == SchemeBalanced => PowerModePreset.Balanced,
-        var s when s == SchemeHigh => PowerModePreset.High,
-        _ => null
-    };
+            : PowerModePreset.Remote;
+    }
 }
 
 internal sealed class WindowsPowerNativeApi : IPowerNativeApi

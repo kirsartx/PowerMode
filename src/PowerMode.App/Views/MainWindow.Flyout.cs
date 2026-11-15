@@ -15,6 +15,7 @@ public sealed partial class MainWindow
     private readonly TrayClickFilter _trayClickFilter = new();
     private bool _isPinned = true;
     private bool _flyoutResizeQueued;
+    private int _autoHideGeneration;
 
     private void ConfigureWindow()
     {
@@ -99,11 +100,19 @@ public sealed partial class MainWindow
     private async void Flyout_Activated(object sender, WindowActivatedEventArgs args)
     {
         if (args.WindowActivationState != WindowActivationState.Deactivated || _isPinned)
+        {
+            _autoHideGeneration++;
             return;
+        }
 
+        var generation = ++_autoHideGeneration;
         await Task.Delay(AutoHideDelayMilliseconds);
-        if (!AppWindow.IsVisible ||
-            !FlyoutWindowPolicy.ShouldAutoHide(_isPinned, FlyoutNative.ForegroundBelongsToCurrentProcess()))
+        if (!FlyoutWindowPolicy.ShouldCompleteAutoHide(
+                generation,
+                _autoHideGeneration,
+                _isPinned,
+                AppWindow.IsVisible,
+                FlyoutNative.ForegroundBelongsToCurrentProcess()))
             return;
 
         HideFlyout();

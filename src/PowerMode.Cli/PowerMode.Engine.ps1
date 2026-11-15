@@ -790,6 +790,21 @@ function Get-GpuPower {
     return 'N/A (run nvidia-smi manually or use HWInfo)'
 }
 
+function Resolve-SaverFamilyMode {
+    param(
+        [Nullable[int]]$CpuMinimum,
+        [Nullable[int]]$CpuMaximum
+    )
+
+    # Saver writes PROCTHROTTLEMIN=3; Remote writes 5. That stays distinct across the
+    # shared 20-50 CPU maximum range. When the minimum cannot be read, keep the
+    # historical maximum threshold. Keep in sync with NativePowerStateReader.DetectMode.
+    if ($CpuMinimum -eq 3) { return 'saver' }
+    if ($null -ne $CpuMinimum) { return 'remote' }
+    if ($null -ne $CpuMaximum -and $CpuMaximum -le 30) { return 'saver' }
+    return 'remote'
+}
+
 function Get-ProfileTag {
     param(
         [string]$PlanName,
@@ -797,10 +812,10 @@ function Get-ProfileTag {
     )
 
     if ($Guid -eq $GUID_SAVER) {
+        $cpuMin = Get-PowerSettingAcValue $Guid SUB_PROCESSOR PROCTHROTTLEMIN
         $cpuMax = Get-PowerSettingAcValue $Guid SUB_PROCESSOR PROCTHROTTLEMAX
-        if ($null -eq $cpuMax) { return 'REMOTE / SAVER' }
-        if ($cpuMax -le 30) { return 'SAVER' }
-        return 'REMOTE'
+        if ($null -eq $cpuMin -and $null -eq $cpuMax) { return 'REMOTE / SAVER' }
+        return (Resolve-SaverFamilyMode -CpuMinimum $cpuMin -CpuMaximum $cpuMax).ToUpperInvariant()
     }
 
     switch -Wildcard ($PlanName) {
@@ -902,6 +917,27 @@ function Show-Status {
     Write-Host (Get-Text 'Tip') -ForegroundColor DarkGray
 }
 
+function Test-CpuMaximumInRange {
+    param(
+        [string]$Label,
+        [Nullable[int]]$Actual
+    )
+
+    # Same 20-50 window as Limit-CpuMax / PresetCpuLimit.
+    if ($null -eq $Actual) {
+        Write-Host ((Get-Text 'CheckMissing') -f $Label, '20-50') -ForegroundColor Yellow
+        return $false
+    }
+
+    if ($Actual -ge 20 -and $Actual -le 50) {
+        Write-Host ((Get-Text 'CheckOk') -f $Label, $Actual) -ForegroundColor Green
+        return $true
+    }
+
+    Write-Host ((Get-Text 'CheckBad') -f $Label, $Actual, '20-50') -ForegroundColor Red
+    return $false
+}
+
 function Test-SettingEquals {
     param(
         [string]$Label,
@@ -935,15 +971,19 @@ function Test-CurrentProfile {
     $expectedCpu = $null
     $expectedBrightness = $null
     $expectedDisplayIdle = $null
+    $checkCpuRange = $false
+    $expectedCpuMin = $null
 
     switch ($tag) {
         'REMOTE' {
-            $expectedCpu = Get-PowerSettingAcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX
+            $checkCpuRange = $true
+            $expectedCpuMin = 5
             $expectedBrightness = $BrightnessRemote
             $expectedDisplayIdle = 60
         }
         'SAVER' {
-            $expectedCpu = Get-PowerSettingAcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX
+            $checkCpuRange = $true
+            $expectedCpuMin = 3
             $expectedBrightness = $BrightnessSaver
             $expectedDisplayIdle = 60
         }
@@ -964,8 +1004,21 @@ function Test-CurrentProfile {
 
     Write-Host ((Get-Text 'VerifyTitle') -f $tag, $plan) -ForegroundColor Cyan
     $ok = $true
-    $ok = (Test-SettingEquals 'CPU max AC' (Get-PowerSettingAcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX) $expectedCpu) -and $ok
-    $ok = (Test-SettingEquals 'CPU max DC' (Get-PowerSettingDcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX) $expectedCpu) -and $ok
+    if ($checkCpuRange) {
+        $cpuAc = Get-PowerSettingAcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX
+        $cpuDc = Get-PowerSettingDcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX
+        $ok = (Test-CpuMaximumInRange 'CPU max AC' $cpuAc) -and $ok
+        $ok = (Test-CpuMaximumInRange 'CPU max DC' $cpuDc) -and $ok
+        if ($null -ne $cpuAc -and $null -ne $cpuDc -and $cpuAc -ne $cpuDc) {
+            Write-Host ((Get-Text 'CheckBad') -f 'CPU max AC/DC', $cpuDc, $cpuAc) -ForegroundColor Red
+            $ok = $false
+        }
+        $ok = (Test-SettingEquals 'CPU min AC' (Get-PowerSettingAcValue $guid SUB_PROCESSOR PROCTHROTTLEMIN) $expectedCpuMin) -and $ok
+        $ok = (Test-SettingEquals 'CPU min DC' (Get-PowerSettingDcValue $guid SUB_PROCESSOR PROCTHROTTLEMIN) $expectedCpuMin) -and $ok
+    } else {
+        $ok = (Test-SettingEquals 'CPU max AC' (Get-PowerSettingAcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX) $expectedCpu) -and $ok
+        $ok = (Test-SettingEquals 'CPU max DC' (Get-PowerSettingDcValue $guid SUB_PROCESSOR PROCTHROTTLEMAX) $expectedCpu) -and $ok
+    }
     $ok = (Test-SettingEquals 'Brightness AC' (Get-PowerSettingAcValue $guid SUB_VIDEO VIDEONORMALLEVEL) $expectedBrightness) -and $ok
     $ok = (Test-SettingEquals 'Brightness DC' (Get-PowerSettingDcValue $guid SUB_VIDEO VIDEONORMALLEVEL) $expectedBrightness) -and $ok
     $ok = (Test-SettingEquals 'Sleep AC' (Get-PowerSettingAcValue $guid SUB_SLEEP STANDBYIDLE) 0) -and $ok
@@ -1265,9 +1318,9 @@ function Get-JsonDetectedMode {
 
     switch ($Guid) {
         $GUID_SAVER {
-            $cpu = Get-PowerSettingAcValue $Guid $JsonCpuSubgroup $JsonCpuMaximum
-            if ($null -ne $cpu -and $cpu -le 30) { return 'saver' }
-            return 'remote'
+            $cpuMin = Get-PowerSettingAcValue $Guid $JsonCpuSubgroup $JsonCpuMinimum
+            $cpuMax = Get-PowerSettingAcValue $Guid $JsonCpuSubgroup $JsonCpuMaximum
+            return Resolve-SaverFamilyMode -CpuMinimum $cpuMin -CpuMaximum $cpuMax
         }
         $GUID_BAL { return 'balanced' }
         $GUID_HIGH { return 'high' }
@@ -1472,6 +1525,9 @@ function Invoke-JsonApplyCustom {
     Set-PowerValueDc $guid $JsonVideoSubgroup $JsonBrightness $brightnessDc 'brightness-dc' $false
     Set-PowerValue $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeoutAc 'display-timeout' $true
     Set-PowerValueDc $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeoutDc 'display-timeout-dc' $true
+    # Custom profiles share the saver scheme and must not leave a previous sleep policy in place.
+    Set-JsonPowerValue $guid $JsonSleepSubgroup $JsonSleepTimeout 0 'sleep-timeout' $true
+    Set-JsonPowerValue $guid $JsonSleepSubgroup $JsonHibernateTimeout 0 'hibernate-timeout' $true
     # The saver scheme is shared with remote/saver, which disable boost, so always write it.
     $boostMode = if ($disableBoost) { 0 } else { 2 }
     Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonBoostMode $boostMode 'processor-boost' $true
@@ -1486,6 +1542,10 @@ function Invoke-JsonApplyCustom {
     Add-JsonExpectation 'brightnessDcPercent' $brightnessDc $false
     Add-JsonExpectation 'displayTimeoutAcSeconds' $displayTimeoutAc $true
     Add-JsonExpectation 'displayTimeoutDcSeconds' $displayTimeoutDc $true
+    Add-JsonExpectation 'sleepTimeoutAcSeconds' 0 $true
+    Add-JsonExpectation 'sleepTimeoutDcSeconds' 0 $true
+    Add-JsonExpectation 'hibernateTimeoutAcSeconds' 0 $true
+    Add-JsonExpectation 'hibernateTimeoutDcSeconds' 0 $true
     Add-JsonExpectation 'processorBoostModeAc' $boostMode $true
     Add-JsonExpectation 'processorBoostModeDc' $boostMode $true
 }

@@ -382,7 +382,7 @@ public sealed partial class MainWindow
             _handlingTemperature = true;
             _temperatureProtectionActive = true;
             await RefreshRecommendationAsync();
-            _temperatureRestoreMode = NormalizeMode(_featureSettings.LastMode, "balanced");
+            _temperatureRestoreMode = ObservedOrRememberedMode();
             _systemIntegration.Notify(new UserNotification(
                 IsChinese ? "温度保护已触发" : "Temperature protection triggered",
                 IsChinese ? $"检测到 {temperature:F1} °C，立即切换到低功耗。" : $"Detected {temperature:F1} °C; switching to Saver.",
@@ -407,7 +407,7 @@ public sealed partial class MainWindow
 
         if (_temperatureProtectionActive &&
             temperature > _featureSettings.TemperatureRecoveryCelsius &&
-            !string.Equals(_featureSettings.LastMode, "saver", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(ObservedOrRememberedMode(), "saver", StringComparison.OrdinalIgnoreCase) &&
             !_modeSwitchInProgress)
         {
             _handlingTemperature = true;
@@ -472,7 +472,7 @@ public sealed partial class MainWindow
         if (snapshot.PowerSource == AutomationPowerSource.Battery &&
             snapshot.BatteryPercent is { } battery &&
             battery <= _featureSettings.LowBatteryThreshold &&
-            !string.Equals(_featureSettings.LastMode, "saver", StringComparison.OrdinalIgnoreCase))
+            !string.Equals(ObservedOrRememberedMode(), "saver", StringComparison.OrdinalIgnoreCase))
         {
             return await RunModeWithContextAsync(
                 "saver",
@@ -485,7 +485,7 @@ public sealed partial class MainWindow
         var rules = _featureSettings.Rules.Count > 0
             ? _featureSettings.Rules
             : AutomationEngine.CreateDefaultRules(_featureSettings.RemoteProcesses, _featureSettings.PerformanceProcesses);
-        var decision = _automationEngine.Evaluate(rules, _featureSettings.LastMode, snapshot);
+        var decision = _automationEngine.Evaluate(rules, ObservedOrRememberedMode(), snapshot);
         if (decision is null || !decision.RequiresSwitch)
             return false;
 
@@ -683,6 +683,9 @@ public sealed partial class MainWindow
             RenderRecommendation();
         }
     }
+
+    private string ObservedOrRememberedMode() =>
+        AutomationEngine.ResolveCurrentMode(_activeModeKey, _featureSettings.LastMode);
 
     private static string NormalizeMode(string? mode, string fallback)
     {

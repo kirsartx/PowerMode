@@ -115,34 +115,10 @@ public static class SettingsStore
             try
             {
                 using var document = JsonDocument.Parse(bytes);
-                if (document.RootElement.ValueKind != JsonValueKind.Object)
-                    throw new JsonException("Settings root must be a JSON object.");
-
-                var state = SettingsLoadState.Migrated;
-                var schema = default(JsonElement);
-                foreach (var property in document.RootElement.EnumerateObject())
-                {
-                    if (string.Equals(
-                            property.Name,
-                            "schemaVersion",
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        schema = property.Value;
-                        break;
-                    }
-                }
-
-                if (schema.ValueKind != JsonValueKind.Undefined)
-                {
-                    if (schema.ValueKind != JsonValueKind.Number ||
-                        !schema.TryGetInt32(out var schemaVersion))
-                        throw new JsonException("Settings schemaVersion is invalid.");
-                    if (schemaVersion != CurrentSchemaVersion)
-                        throw new InvalidDataException(
-                            $"Unsupported settings schema version {schemaVersion}.");
-                    state = SettingsLoadState.Loaded;
-                }
-
+                var hasSchema = EnsureSupportedSchema(document.RootElement);
+                var state = hasSchema
+                    ? SettingsLoadState.Loaded
+                    : SettingsLoadState.Migrated;
                 var settings = DeserializeStrict(Encoding.UTF8.GetString(bytes));
                 return new(state, settings);
             }
@@ -186,7 +162,49 @@ public static class SettingsStore
         return DeserializeStrict(JsonSerializer.Serialize(settings, JsonOptions));
     }
     public static void Export(PowerModeSettings settings, string path) { lock(FileGate)File.WriteAllText(path, JsonSerializer.Serialize(Normalize(settings), JsonOptions)); }
-    public static PowerModeSettings Import(string path) { lock(FileGate)return Normalize(JsonSerializer.Deserialize<PowerModeSettings>(File.ReadAllText(path), JsonOptions)); }
+    public static PowerModeSettings Import(string path)
+    {
+        lock (FileGate)
+        {
+            var json = File.ReadAllText(path);
+            using var document = JsonDocument.Parse(json);
+            EnsureSupportedSchema(document.RootElement);
+            return DeserializeStrict(json);
+        }
+    }
+
+    /// <summary>
+    /// Rejects a future or non-numeric schemaVersion. A missing schemaVersion is
+    /// allowed and reported as false so callers can treat it as a legacy file.
+    /// </summary>
+    internal static bool EnsureSupportedSchema(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Settings root must be a JSON object.");
+
+        var schema = default(JsonElement);
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(
+                    property.Name,
+                    "schemaVersion",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                schema = property.Value;
+                break;
+            }
+        }
+
+        if (schema.ValueKind == JsonValueKind.Undefined)
+            return false;
+        if (schema.ValueKind != JsonValueKind.Number ||
+            !schema.TryGetInt32(out var schemaVersion))
+            throw new JsonException("Settings schemaVersion is invalid.");
+        if (schemaVersion != CurrentSchemaVersion)
+            throw new InvalidDataException(
+                $"Unsupported settings schema version {schemaVersion}.");
+        return true;
+    }
     internal static PowerModeSettings DeserializeStrict(string json)
     {
         var settings = JsonSerializer.Deserialize<PowerModeSettings>(json, JsonOptions)

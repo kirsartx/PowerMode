@@ -162,6 +162,22 @@ public sealed class AutomationEngine
         return null;
     }
 
+    /// <summary>
+    /// Prefers a mode observed from the live power state. Falls back to the
+    /// remembered preset when the observation is missing or not a standard mode,
+    /// so automation does not treat "unknown" as a reason to switch.
+    /// </summary>
+    public static string ResolveCurrentMode(string? observedMode, string? rememberedMode)
+    {
+        var observed = observedMode?.Trim().ToLowerInvariant();
+        if (observed is "remote" or "saver" or "balanced" or "high")
+            return observed;
+        var remembered = rememberedMode?.Trim().ToLowerInvariant();
+        return remembered is "remote" or "saver" or "balanced" or "high"
+            ? remembered
+            : "balanced";
+    }
+
     public bool Matches(AutomationRule? rule, AutomationSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

@@ -58,18 +58,57 @@ public sealed class NativePowerStateReaderTests
     }
 
     [Theory]
-    [InlineData(30, "Saver")]
-    [InlineData(32, "Remote")]
-    [InlineData(null, "Remote")]
-    public void DetectMode_SaverSchemeThresholdsByCpuMax(int? cpuMax, string expected)
+    [InlineData(30, null, "Saver")]
+    [InlineData(32, null, "Remote")]
+    [InlineData(null, null, "Remote")]
+    [InlineData(28, 5, "Remote")]
+    [InlineData(45, 5, "Remote")]
+    [InlineData(45, 3, "Saver")]
+    [InlineData(20, 3, "Saver")]
+    public void DetectMode_SaverSchemeUsesCpuMinimumThenMaximumFallback(
+        int? cpuMax,
+        int? cpuMin,
+        string expected)
     {
         var api = new FakePowerNativeApi { Scheme = NativePowerStateReader.SchemeSaver };
-        if (cpuMax is int value)
-            api.Set(NativePowerStateReader.CpuMaximum, ac: value, dc: value);
+        if (cpuMax is int maximum)
+            api.Set(NativePowerStateReader.CpuMaximum, ac: maximum, dc: maximum);
+        if (cpuMin is int minimum)
+            api.Set(NativePowerStateReader.CpuMinimum, ac: minimum, dc: minimum);
 
         var state = new NativePowerStateReader(api).TryRead()!;
 
         Assert.Equal(expected, state.DetectedMode?.ToString());
+    }
+
+    [Theory]
+    [InlineData(PowerModePreset.Remote, 45, 45)]
+    [InlineData(PowerModePreset.Remote, 10, 32)]
+    [InlineData(PowerModePreset.Remote, 80, 50)]
+    [InlineData(PowerModePreset.Saver, 45, 45)]
+    [InlineData(PowerModePreset.Saver, 10, 30)]
+    public void Applier_CpuMaximum_MatchesPresetLimit(PowerModePreset preset, int requested, int expected)
+    {
+        var api = new FakePowerNativeApi { Scheme = NativePowerStateReader.SchemeSaver };
+        var applier = new NativePowerApplier(api);
+
+        var result = applier.TryApplyPreset(
+            Guid.NewGuid(),
+            PowerModeTarget.ForPreset(preset),
+            requested);
+        Assert.NotNull(result);
+
+        AssertWrite(api, NativePowerStateReader.CpuMaximum, ac: expected, dc: expected);
+        AssertExpectation(
+            result,
+            PowerModeStateField.CpuMaximumAcPercent,
+            expected.ToString(),
+            critical: true);
+        AssertExpectation(
+            result,
+            PowerModeStateField.CpuMaximumDcPercent,
+            expected.ToString(),
+            critical: true);
     }
 
     [Fact]

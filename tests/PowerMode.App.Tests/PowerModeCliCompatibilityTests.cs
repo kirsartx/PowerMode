@@ -22,6 +22,12 @@ public sealed class PowerModeCliCompatibilityTests
             "aded5e82-b909-4619-9949-f5d71dac0bcb";
         public const string DisplayTimeout =
             "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e";
+        public const string SleepSubgroup =
+            "238c9fa8-0aad-41ed-83f4-97be242c8f20";
+        public const string SleepTimeout =
+            "29f6c1db-86da-48c5-9fdb-f2b67b1f44da";
+        public const string HibernateTimeout =
+            "9d7815a6-7ee4-497e-8888-515a05f02364";
     }
 
     private const string SaverScheme =
@@ -306,13 +312,22 @@ public sealed class PowerModeCliCompatibilityTests
         Assert.Equal(45, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.Brightness, "dc"));
         Assert.Equal(300, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.DisplayTimeout, "ac"));
         Assert.Equal(120, SavedValue(saved, SaverScheme, KnownPowerSettings.VideoSubgroup, KnownPowerSettings.DisplayTimeout, "dc"));
-        Assert.DoesNotContain(
-            contract.Expectations,
-            expectation => expectation.Field is
-                PowerModeStateField.SleepTimeoutAcSeconds or
-                PowerModeStateField.SleepTimeoutDcSeconds or
-                PowerModeStateField.HibernateTimeoutAcSeconds or
-                PowerModeStateField.HibernateTimeoutDcSeconds);
+        Assert.Equal(0, SavedValue(saved, SaverScheme, KnownPowerSettings.SleepSubgroup, KnownPowerSettings.SleepTimeout, "ac"));
+        Assert.Equal(0, SavedValue(saved, SaverScheme, KnownPowerSettings.SleepSubgroup, KnownPowerSettings.SleepTimeout, "dc"));
+        Assert.Equal(0, SavedValue(saved, SaverScheme, KnownPowerSettings.SleepSubgroup, KnownPowerSettings.HibernateTimeout, "ac"));
+        Assert.Equal(0, SavedValue(saved, SaverScheme, KnownPowerSettings.SleepSubgroup, KnownPowerSettings.HibernateTimeout, "dc"));
+        foreach (var field in new[]
+                 {
+                     PowerModeStateField.SleepTimeoutAcSeconds,
+                     PowerModeStateField.SleepTimeoutDcSeconds,
+                     PowerModeStateField.HibernateTimeoutAcSeconds,
+                     PowerModeStateField.HibernateTimeoutDcSeconds
+                 })
+        {
+            var expectation = Assert.Single(contract.Expectations, item => item.Field == field);
+            Assert.Equal("0", expectation.ExpectedValue);
+            Assert.True(expectation.Critical);
+        }
         Assert.Contains(
             contract.Expectations,
             expectation => expectation.Field == PowerModeStateField.DisplayTimeoutDcSeconds &&

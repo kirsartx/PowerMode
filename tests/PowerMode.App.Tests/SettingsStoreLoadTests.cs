@@ -93,4 +93,43 @@ public sealed class SettingsStoreLoadTests
         Assert.Equal(bytes, File.ReadAllBytes(path));
         Assert.Contains("schema", result.Error!, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void Import_FutureSchema_ThrowsAndDoesNotNormalize()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = System.IO.Path.Combine(directory.Path, "import.json");
+        File.WriteAllText(path, "{\"schemaVersion\":99,\"lastMode\":\"remote\"}");
+
+        var error = Assert.Throws<InvalidDataException>(() => SettingsStore.Import(path));
+
+        Assert.Contains("99", error.Message);
+    }
+
+    [Fact]
+    public void Import_CurrentSchema_NormalizesLikeLoad()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = System.IO.Path.Combine(directory.Path, "import.json");
+        File.WriteAllText(path, "{\"schemaVersion\":1,\"lastMode\":\"remote\"}");
+
+        var settings = SettingsStore.Import(path);
+
+        Assert.Equal(SettingsStore.CurrentSchemaVersion, settings.SchemaVersion);
+        Assert.Equal("remote", settings.LastMode);
+        Assert.Equal(ExperienceMode.Simple, settings.ExperienceMode);
+    }
+
+    [Fact]
+    public void Import_MissingSchema_IsAcceptedAsLegacy()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = System.IO.Path.Combine(directory.Path, "import.json");
+        File.WriteAllText(path, "{\"lastMode\":\"high\"}");
+
+        var settings = SettingsStore.Import(path);
+
+        Assert.Equal("high", settings.LastMode);
+        Assert.Equal(SettingsStore.CurrentSchemaVersion, settings.SchemaVersion);
+    }
 }

@@ -151,10 +151,69 @@ public sealed class ModeSwitchCoordinatorTests
 
         var result = await coordinator.TrySwitchAsync(Requests.Remote());
 
-        Assert.Null(result);
+        Assert.NotNull(result);
+        Assert.True(result.RequiresRecovery);
+        Assert.Equal(ModeSwitchOutcome.Failed, result.Outcome);
+        Assert.Contains("recovered", result.JournalError, StringComparison.OrdinalIgnoreCase);
+        var presentation = ModeSwitchResultPresentationPolicy.Create(
+            result,
+            ExperienceMode.Simple,
+            isChinese: false);
+        Assert.Equal(ModeSwitchPresentationAction.OpenRecoveryCenter, presentation.Action);
         Assert.Equal(0, backend.ReadCount);
         Assert.Equal(0, backend.ApplyCount);
         Assert.Empty(journal.Writes);
+        Assert.Null(await coordinator.TrySwitchAsync(Requests.Saver()));
+    }
+
+    [Theory]
+    [InlineData(45, 45)]
+    [InlineData(15, 32)]
+    [InlineData(80, 50)]
+    public async Task TrySwitchAsync_RemoteCpuFollowsEngineLimit(int requested, int applied)
+    {
+        var backend = ScenarioBackend.ForRemote(cpu: applied);
+        backend.Reads.Enqueue(backend.ReadResult(backend.RemoteState(applied)));
+        var coordinator = TestCoordinator.Create(backend);
+        var request = Requests.Remote() with { CpuMaximumPercent = requested };
+
+        var result = await coordinator.TrySwitchAsync(request);
+
+        Assert.Equal(ModeSwitchOutcome.Succeeded, result!.Outcome);
+        Assert.Null(result.Rollback);
+        Assert.Equal(0, backend.RestoreCount);
+    }
+
+    [Fact]
+    public async Task TrySwitchAsync_CancellationAfterPreparedClosesJournal()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var preparedSeen = false;
+        var backend = ScenarioBackend.ForRemote(cpu: 31);
+        var journal = new RecordingLastOperationStore
+        {
+            AfterSuccessfulWrite = record =>
+            {
+                if (preparedSeen || record.Status != LastOperationStatus.Prepared)
+                    return;
+                preparedSeen = true;
+                cancellation.Cancel();
+            }
+        };
+        var coordinator = TestCoordinator.Create(backend, journal);
+
+        var result = await coordinator.TrySwitchAsync(Requests.Remote(), cancellation.Token);
+
+        Assert.Equal(ModeSwitchOutcome.Cancelled, result!.Outcome);
+        Assert.False(result.RequiresRecovery);
+        Assert.Equal(0, backend.ApplyCount);
+        Assert.Equal(
+            [LastOperationStatus.Prepared, LastOperationStatus.RolledBack],
+            journal.Writes.Select(record => record.Status));
+        Assert.Equal(ModeSwitchOutcome.Cancelled, journal.Writes[^1].Outcome);
+        var followUp = await coordinator.TrySwitchAsync(Requests.Saver());
+        Assert.NotNull(followUp);
+        Assert.False(followUp.RequiresRecovery);
     }
 
     [Fact]
@@ -660,6 +719,7 @@ public sealed class ModeSwitchCoordinatorTests
         public Queue<LastOperationWriteResult> WriteResults { get; set; } = new();
         public LastOperationRecord? Current { get; set; }
         public string? ReadError { get; set; }
+        public Action<LastOperationRecord>? AfterSuccessfulWrite { get; set; }
 
         public Task<LastOperationReadResult> ReadAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new LastOperationReadResult(Current, ReadError));
@@ -676,6 +736,7 @@ public sealed class ModeSwitchCoordinatorTests
             {
                 Current = record;
                 Writes.Add(record);
+                AfterSuccessfulWrite?.Invoke(record);
             }
             return Task.FromResult(result);
         }
@@ -723,7 +784,11 @@ public sealed class ModeSwitchCoordinatorTests
         Expect(PowerModeStateField.BrightnessAcPercent, profile.BrightnessAcPercent.ToString(), false),
         Expect(PowerModeStateField.BrightnessDcPercent, profile.BrightnessDcPercent.ToString(), false),
         Expect(PowerModeStateField.DisplayTimeoutAcSeconds, profile.DisplayTimeoutAcSeconds.ToString(), true),
-        Expect(PowerModeStateField.DisplayTimeoutDcSeconds, profile.DisplayTimeoutDcSeconds.ToString(), true)
+        Expect(PowerModeStateField.DisplayTimeoutDcSeconds, profile.DisplayTimeoutDcSeconds.ToString(), true),
+        Expect(PowerModeStateField.SleepTimeoutAcSeconds, "0", true),
+        Expect(PowerModeStateField.SleepTimeoutDcSeconds, "0", true),
+        Expect(PowerModeStateField.HibernateTimeoutAcSeconds, "0", true),
+        Expect(PowerModeStateField.HibernateTimeoutDcSeconds, "0", true)
     ];
 
     private static VerificationExpectation Expect(

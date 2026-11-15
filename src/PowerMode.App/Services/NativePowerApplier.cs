@@ -114,21 +114,8 @@ internal sealed class NativePowerApplier
         _ => NativePowerStateReader.SchemeHigh
     };
 
-    // Mirrors the engine's Limit-CpuMax ($Value < 20 -> default, > 50 -> 50, else value).
-    private static int CpuFor(PowerModePreset preset, int? cpuMaximumPercent) => preset switch
-    {
-        PowerModePreset.Remote => LimitCpuMax(cpuMaximumPercent, 32),
-        PowerModePreset.Saver => LimitCpuMax(cpuMaximumPercent, 30),
-        _ => 100
-    };
-
-    private static int LimitCpuMax(int? value, int fallback) => value switch
-    {
-        null => fallback,
-        { } v when v < 20 => fallback,
-        { } v when v > 50 => 50,
-        { } v => v
-    };
+    private static int CpuFor(PowerModePreset preset, int? cpuMaximumPercent) =>
+        PresetCpuLimit.Normalize(preset, cpuMaximumPercent);
 
     // Mirrors Add-JsonStandardExpectations; value strings use the same invariant formatting
     // as ModeSwitchCoordinator so IsApplyContractValid's set-equality holds.

@@ -105,7 +105,9 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             if (journal.Record is { } record && IsRecoveryPending(record.Status))
             {
                 _recoveryRequired = true;
-                return null;
+                return RecoveryRequiredResult(
+                    request.OperationId,
+                    "The previous power operation must be recovered first.");
             }
 
             return await TrySwitchCoreAsync(request, cancellationToken).ConfigureAwait(false);
@@ -429,7 +431,12 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
 
         if (cancellationToken.IsCancellationRequested)
         {
-            return CancelledResult(request.OperationId, beforeState);
+            // Prepared is recovery-pending. Close it before returning, or the next
+            // switch is blocked even though no power setting was changed.
+            return await CloseCancelledPreparationAsync(
+                request,
+                prepared,
+                beforeState).ConfigureAwait(false);
         }
 
         var applying = prepared with { Status = LastOperationStatus.Applying };
@@ -885,10 +892,10 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         {
             var cpu = preset switch
             {
-                PowerModePreset.Remote => Math.Clamp(request.CpuMaximumPercent ?? 32, 1, 32),
-                PowerModePreset.Saver => Math.Clamp(request.CpuMaximumPercent ?? 30, 1, 30),
+                PowerModePreset.Remote or PowerModePreset.Saver =>
+                    PresetCpuLimit.Normalize(preset, request.CpuMaximumPercent),
                 PowerModePreset.Balanced or PowerModePreset.High => 100,
-                _ => throw new ArgumentOutOfRangeException()
+                _ => throw new ArgumentOutOfRangeException(nameof(preset))
             };
             var scheme = preset switch
             {
@@ -924,6 +931,10 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             Add(expectations, PowerModeStateField.BrightnessDcPercent, profile.BrightnessDcPercent, false);
             Add(expectations, PowerModeStateField.DisplayTimeoutAcSeconds, profile.DisplayTimeoutAcSeconds, true);
             Add(expectations, PowerModeStateField.DisplayTimeoutDcSeconds, profile.DisplayTimeoutDcSeconds, true);
+            Add(expectations, PowerModeStateField.SleepTimeoutAcSeconds, 0, true);
+            Add(expectations, PowerModeStateField.SleepTimeoutDcSeconds, 0, true);
+            Add(expectations, PowerModeStateField.HibernateTimeoutAcSeconds, 0, true);
+            Add(expectations, PowerModeStateField.HibernateTimeoutDcSeconds, 0, true);
         }
 
         if (request.DisableWifi)
@@ -1141,6 +1152,33 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
         RequiresRecovery = true,
         JournalError = Bound(error)
     };
+
+    private async Task<ModeSwitchResult> CloseCancelledPreparationAsync(
+        ModeSwitchRequest request,
+        LastOperationRecord prepared,
+        PowerModeState beforeState)
+    {
+        var cancelled = CancelledResult(request.OperationId, beforeState);
+        using var cleanup = new CancellationTokenSource(CleanupTimeout);
+        var terminal = await TryWriteAsync(
+            prepared with
+            {
+                Status = LastOperationStatus.RolledBack,
+                Outcome = ModeSwitchOutcome.Cancelled
+            },
+            request.OperationId,
+            cleanup.Token).ConfigureAwait(false);
+        if (terminal.Succeeded)
+            return cancelled;
+
+        _recoveryRequired = true;
+        return cancelled with
+        {
+            RequiresRecovery = true,
+            JournalError = terminal.Error ??
+                "The cancelled operation journal could not be closed."
+        };
+    }
 
     private static ModeSwitchResult CancelledResult(
         Guid operationId,

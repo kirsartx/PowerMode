@@ -323,7 +323,7 @@ public sealed partial class MainWindow
     private void ShowFromTray()=>ShowFlyout(fromTray:true);
     private void ShowTrayMenu()
     {
-        var menu=Native.CreatePopupMenu();Native.AppendMenu(menu,0,1,"Remote");Native.AppendMenu(menu,0,2,"Saver");Native.AppendMenu(menu,0,3,"Balanced");Native.AppendMenu(menu,0,4,"High performance");Native.AppendMenu(menu,0x800,0,null);Native.AppendMenu(menu,0,10,"Show PowerMode");Native.AppendMenu(menu,0,11,"Exit");Native.GetCursorPos(out var point);Native.SetForegroundWindow(_hwnd);var command=Native.TrackPopupMenu(menu,0x100|0x2,point.X,point.Y,0,_hwnd,IntPtr.Zero);Native.DestroyMenu(menu);
+        var menu=Native.CreatePopupMenu();Native.AppendMenu(menu,0,1,T("Remote"));Native.AppendMenu(menu,0,2,T("Saver"));Native.AppendMenu(menu,0,3,T("Balanced"));Native.AppendMenu(menu,0,4,T("High"));Native.AppendMenu(menu,0x800,0,null);Native.AppendMenu(menu,0,10,T("TrayShow"));Native.AppendMenu(menu,0,11,T("Exit"));Native.GetCursorPos(out var point);Native.SetForegroundWindow(_hwnd);var command=Native.TrackPopupMenu(menu,0x100|0x2,point.X,point.Y,0,_hwnd,IntPtr.Zero);Native.DestroyMenu(menu);
         var mode=command switch{1=>"remote",2=>"saver",3=>"balanced",4=>"high",_=>string.Empty};if(mode.Length>0)_=RunModeWithContextAsync(mode,new SwitchRequestContext("tray",AllowPreview:false));else if(command==10)ShowFromTray();else if(command==11)Close();
     }
 
@@ -335,7 +335,9 @@ public sealed partial class MainWindow
             return;
         }
         if(_modeSwitchInProgress||_powerStateRevisionGate.MutationInProgress)return;
-        if (await RunTargetCoreAsync(
+        // The switch path paints the verified readback. Custom profiles do not
+        // rewrite sleep or hibernate, so do not overwrite that reading here.
+        await RunTargetCoreAsync(
             PowerModeTarget.ForCustom(CustomPowerProfileSnapshot.FromSettings(profile)),
             cpuMaximumPercent: null,
             disableWifi: false,
@@ -343,10 +345,7 @@ public sealed partial class MainWindow
                 "custom-profile",
                 profile.Name,
                 AllowPreview: false),
-            profile))
-        {
-            SleepValue.Text = CustomProfileSleepDisplay.Format(profile.DisplayOffSeconds);
-        }
+            profile);
     }
     internal async Task VerifyWithSummaryAsync()
     {
