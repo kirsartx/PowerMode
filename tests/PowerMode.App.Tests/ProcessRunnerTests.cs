@@ -113,6 +113,28 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task LanguageRequest_RunsBatchFileFromPathWithSpaces()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"pm lang {Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var cli = Path.Combine(directory, "Power Mode Switcher.bat");
+            await File.WriteAllTextAsync(cli, "@echo off\r\necho args=%*\r\n");
+
+            var result = await new ProcessRunner().RunAsync(
+                PowerModeCliRequests.Language(cli, "en"));
+
+            Assert.True(result.Succeeded, result.StandardError);
+            Assert.Equal("args=lang en", result.StandardOutput.Trim());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_RequiresFinitePositiveTimeout()
     {
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>

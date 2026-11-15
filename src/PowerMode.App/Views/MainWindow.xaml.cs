@@ -264,12 +264,7 @@ public sealed partial class MainWindow : Window
             return false;
         }
         var execution = await _processRunner.RunAsync(
-            new ProcessExecutionRequest(
-                "cmd.exe",
-                ["/d", "/s", "/c", $"\"\"{_cliPath}\" lang {language}\""],
-                TimeSpan.FromSeconds(10),
-                Path.GetDirectoryName(_cliPath),
-                new Dictionary<string, string?> { ["PM_NO_PAUSE"] = "1" }),
+            PowerModeCliRequests.Language(_cliPath, language),
             cancellationToken);
         AppendProcessDiagnostics("lang", execution);
         return execution.Succeeded;
