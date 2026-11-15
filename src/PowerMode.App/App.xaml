@@ -13,12 +13,69 @@
                 <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
                 <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
                 <Setter Property="BorderThickness" Value="1"/>
-                <Setter Property="CornerRadius" Value="12"/>
-                <Setter Property="Padding" Value="20"/>
+                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="Padding" Value="16"/>
             </Style>
-            <Style x:Key="StatusCardStyle" TargetType="Border" BasedOn="{StaticResource PanelStyle}"><Setter Property="Padding" Value="14"/></Style>
+            <Style x:Key="StatusCardStyle" TargetType="Border" BasedOn="{StaticResource PanelStyle}"><Setter Property="Padding" Value="12"/></Style>
             <Style x:Key="CardLabelStyle" TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource ContentControlThemeFontFamily}"/><Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/><Setter Property="FontSize" Value="12"/></Style>
             <Style x:Key="CardValueStyle" TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource AppDisplayFontFamily}"/><Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/><Setter Property="FontSize" Value="18"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="Margin" Value="0,5,0,0"/></Style>
+
+            <Style x:Key="FlyoutCardStyle" TargetType="Border" BasedOn="{StaticResource PanelStyle}">
+                <Setter Property="Padding" Value="12"/>
+            </Style>
+            <Style x:Key="SectionLabelStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Style>
+            <Style x:Key="MetricLabelStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11"/>
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            </Style>
+            <Style x:Key="MetricValueStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource AppDisplayFontFamily}"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/>
+                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                <Setter Property="Margin" Value="0,2,0,0"/>
+            </Style>
+            <Style x:Key="ModeTileStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                <Setter Property="VerticalAlignment" Value="Stretch"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                <Setter Property="MinHeight" Value="60"/>
+                <Setter Property="Padding" Value="12,10"/>
+                <Setter Property="CornerRadius" Value="8"/>
+            </Style>
+            <Style x:Key="ModeTileCurrentStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                <Setter Property="VerticalAlignment" Value="Stretch"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                <Setter Property="MinHeight" Value="60"/>
+                <Setter Property="Padding" Value="12,10"/>
+                <Setter Property="CornerRadius" Value="8"/>
+            </Style>
+            <Style x:Key="PillToggleStyle" TargetType="ToggleButton" BasedOn="{StaticResource DefaultToggleButtonStyle}">
+                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                <Setter Property="CornerRadius" Value="16"/>
+                <Setter Property="Padding" Value="12,6"/>
+            </Style>
+            <Style x:Key="HeaderIconButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Width" Value="32"/>
+                <Setter Property="Height" Value="32"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorTransparentBrush}"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="CornerRadius" Value="6"/>
+            </Style>
+            <Style x:Key="LinkTextButtonStyle" TargetType="HyperlinkButton">
+                <Setter Property="Padding" Value="6,2"/>
+                <Setter Property="FontSize" Value="12"/>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

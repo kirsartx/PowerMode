@@ -26,8 +26,14 @@ public sealed class FluentAccessibilityPresentationTests
         Assert.Equal("Wrap", AttributeValue(recommendationReason, "TextWrapping"));
         Assert.Equal("Polite", AutomationAttribute(recommendationReason, "LiveSetting"));
 
-        var experienceToggle = NamedElement(document, "ExperienceModeButton");
-        Assert.False(string.IsNullOrWhiteSpace(AutomationAttribute(experienceToggle, "Name")));
+        Assert.Equal("ExpandButton_Click", AttributeValue(NamedElement(document, "ExpandButton"), "Click"));
+        Assert.Equal("PinButton_Click", AttributeValue(NamedElement(document, "PinButton"), "Click"));
+        var flyout = Minify(File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.Flyout.cs")));
+        var features = Minify(File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "MainWindow.Features.cs")));
+        Assert.Contains("AutomationProperties.SetName(PinButton,text)", flyout);
+        Assert.Contains("AutomationProperties.SetName(ExpandButton,", features);
 
         Assert.DoesNotMatch(new Regex("""#[0-9A-Fa-f]{3,8}"""), document.ToString());
         Assert.Contains(
@@ -45,36 +51,39 @@ public sealed class FluentAccessibilityPresentationTests
     }
 
     [Fact]
-    public void MainWindow_DeclaresNamedAdaptiveCardsAndNarrowProfessionalOverflow()
+    public void MainWindow_DeclaresFlyoutMetricsAndMoreMenu()
     {
         var document = XDocument.Load(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.xaml"));
 
-        _ = NamedElement(document, "StatusCardsGrid");
+        var metrics = NamedElement(document, "MetricsGrid");
         foreach (var cardName in new[]
                  {
-                     "ModeStatusCard",
-                     "GpuStatusCard",
-                     "PowerStatusCard",
                      "CpuStatusCard",
                      "BrightnessStatusCard",
+                     "PowerStatusCard",
+                     "GpuStatusCard",
                      "SleepStatusCard"
                  })
         {
-            _ = NamedElement(document, cardName);
+            Assert.Contains(metrics, NamedElement(document, cardName).Ancestors());
         }
 
         var moreButton = NamedElement(document, "MoreButton");
-        Assert.Equal("Collapsed", AttributeValue(moreButton, "Visibility"));
-        foreach (var itemName in new[]
+        Assert.Null(AttributeValue(moreButton, "Visibility"));
+        foreach (var (itemName, handler) in new[]
                  {
-                     "OverflowAutoQuickToggle",
-                     "OverflowLiveQuickToggle",
-                     "OverflowFeaturesMenuItem",
-                     "OverflowInsightsMenuItem"
+                     ("FeaturesButton", "FeaturesButton_Click"),
+                     ("InsightsButton", "InsightsButton_Click"),
+                     ("RecoveryCenterButton", "OpenRecoveryCenterButton_Click"),
+                     ("LanguageButton", "LanguageButton_Click"),
+                     ("ExitMenuItem", "ExitMenuItem_Click")
                  })
         {
-            _ = NamedElement(document, itemName);
+            var item = NamedElement(document, itemName);
+            Assert.Equal("MenuFlyoutItem", item.Name.LocalName);
+            Assert.Contains(moreButton, item.Ancestors());
+            Assert.Equal(handler, AttributeValue(item, "Click"));
         }
     }
 
@@ -95,19 +104,35 @@ public sealed class FluentAccessibilityPresentationTests
     }
 
     [Fact]
-    public void MainWindow_DeclaresBoundedAdaptiveViewportAndModeGrid()
+    public void MainWindow_ExpandsProfessionalSectionsInsideScrollableFlyout()
     {
         var document = XDocument.Load(FindRepositoryFile(
             "src", "PowerMode.App", "Views", "MainWindow.xaml"));
 
-        var viewport = NamedElement(document, "AdaptiveContentScrollViewer");
-        var statusCards = NamedElement(document, "StatusCardsGrid");
-        var mainContent = NamedElement(document, "MainContentGrid");
-        _ = NamedElement(document, "AdaptiveContentGrid");
-        _ = NamedElement(document, "ModeButtonsGrid");
+        var viewport = NamedElement(document, "ContentScrollViewer");
+        foreach (var name in new[]
+                 {
+                     "RecommendationCard",
+                     "ModeButtonsGrid",
+                     "MetricsCard",
+                     "QuickTogglesGrid",
+                     "ProfessionalModeControls",
+                     "ProfessionalLogPanel"
+                 })
+        {
+            Assert.Contains(viewport, NamedElement(document, name).Ancestors());
+        }
 
-        Assert.Contains(viewport, statusCards.Ancestors());
-        Assert.Contains(viewport, mainContent.Ancestors());
+        foreach (var name in new[] { "ProfessionalModeControls", "ProfessionalLogPanel" })
+            Assert.Equal("Collapsed", AttributeValue(NamedElement(document, name), "Visibility"));
+
+        var header = NamedElement(document, "HeaderGrid");
+        var footer = NamedElement(document, "FooterBorder");
+        Assert.DoesNotContain(viewport, header.Ancestors());
+        Assert.DoesNotContain(viewport, footer.Ancestors());
+        Assert.Contains(header, NamedElement(document, "HeaderDragRegion").Ancestors());
+        Assert.Contains(footer, NamedElement(document, "StatusBar").Ancestors());
+        Assert.Contains(footer, NamedElement(document, "ExpandButton").Ancestors());
     }
 
     [Fact]

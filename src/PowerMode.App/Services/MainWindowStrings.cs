@@ -27,7 +27,9 @@ internal static class MainWindowStrings
             ["Log"]="日志", ["LogHint"]="实时显示本次会话的命令输出", ["AutoScroll"]="自动滚动", ["LineCount"]="{0} 行", ["Copy"]="复制", ["Clear"]="清空", ["Ready"]="就绪",
             ["Running"]="执行中：{0}", ["Done"]="完成：{0} · {1:0.0} 秒", ["Failed"]="失败：{0} · {1:0.0} 秒", ["RefreshTimeout"]="刷新超时，请稍后重试", ["CliPath"]="CLI：{0}", ["Unknown"]="未知",
             ["CliMissing"]="找不到 PowerModeSwitcher.bat。请把 GUI 与 CLI 放在同一目录树。", ["ConfirmNoWifiTitle"]="确认关闭 WiFi", ["ConfirmNoWifi"]="这可能中断远程连接。仅在网线已连接且远程访问不依赖 WiFi 时继续。",
-            ["Confirm"]="继续", ["Cancel"]="取消", ["Copied"]="日志已复制到剪贴板", ["ModeRemote"]="远程推荐", ["ModeSaver"]="低功耗", ["ModeBalanced"]="平衡", ["ModeHigh"]="高性能"
+            ["Confirm"]="继续", ["Cancel"]="取消", ["Copied"]="日志已复制到剪贴板", ["ModeRemote"]="远程推荐", ["ModeSaver"]="低功耗", ["ModeBalanced"]="平衡", ["ModeHigh"]="高性能",
+            ["Exit"]="退出", ["Pin"]="固定窗口：不再自动收起，可拖动", ["Unpin"]="取消固定：回到托盘浮窗", ["Professional"]="专业", ["Collapse"]="收起",
+            ["ExpandAutomation"]="展开专业工具", ["CollapseAutomation"]="收起专业工具"
         },
         ["en"] = new()
         {
@@ -41,7 +43,9 @@ internal static class MainWindowStrings
             ["Log"]="Log", ["LogHint"]="Live command output from this session", ["AutoScroll"]="Auto scroll", ["LineCount"]="{0} lines", ["Copy"]="Copy", ["Clear"]="Clear", ["Ready"]="Ready",
             ["Running"]="Running: {0}", ["Done"]="Done: {0} · {1:0.0}s", ["Failed"]="Failed: {0} · {1:0.0}s", ["RefreshTimeout"]="Refresh timed out. Please try again", ["CliPath"]="CLI: {0}", ["Unknown"]="Unknown",
             ["CliMissing"]="PowerModeSwitcher.bat was not found. Keep the GUI and CLI in the same folder tree.", ["ConfirmNoWifiTitle"]="Confirm WiFi off", ["ConfirmNoWifi"]="This may disconnect remote access. Continue only with Ethernet connected and remote access independent of WiFi.",
-            ["Confirm"]="Continue", ["Cancel"]="Cancel", ["Copied"]="Log copied to clipboard", ["ModeRemote"]="Remote", ["ModeSaver"]="Saver", ["ModeBalanced"]="Balanced", ["ModeHigh"]="High performance"
+            ["Confirm"]="Continue", ["Cancel"]="Cancel", ["Copied"]="Log copied to clipboard", ["ModeRemote"]="Remote", ["ModeSaver"]="Saver", ["ModeBalanced"]="Balanced", ["ModeHigh"]="High performance",
+            ["Exit"]="Exit", ["Pin"]="Pin window: stays open and can be moved", ["Unpin"]="Unpin: return to the tray flyout", ["Professional"]="Pro", ["Collapse"]="Collapse",
+            ["ExpandAutomation"]="Show professional tools", ["CollapseAutomation"]="Hide professional tools"
         }
     };
 }

@@ -11,7 +11,7 @@ namespace PowerModeWinUI;
 
 public sealed partial class MainWindow
 {
-    private const uint WmHotkey=0x0312,WmTray=0x8000+100,WmLButtonDblClk=0x0203,WmRButtonUp=0x0205;
+    private const uint WmHotkey=0x0312,WmTray=0x8000+100,WmLButtonUp=0x0202,WmLButtonDblClk=0x0203,WmRButtonUp=0x0205;
     private const uint ModAlt=0x0001,ModControl=0x0002;
     private SettingsLoadResult _settingsLoadResult=default!;
     private PowerModeSettings _featureSettings=default!;
@@ -104,24 +104,26 @@ public sealed partial class MainWindow
     {
         _featureSettings.ExperienceMode=mode;
         var professional=mode==ExperienceMode.Professional;
-        ProfessionalModeControls.Visibility=professional?Visibility.Visible:Visibility.Collapsed;
-        ExperienceModeText.Text=professional
-            ?(IsChinese?"专业":"Professional")
-            :(IsChinese?"简单":"Simple");
-        ExperienceModeButton.IsChecked=professional;
+        var visibility=professional?Visibility.Visible:Visibility.Collapsed;
+        ProfessionalModeControls.Visibility=visibility;
+        ProfessionalLogPanel.Visibility=visibility;
+        ExpandText.Text=T(professional?"Collapse":"Professional");
+        ExpandIcon.Glyph=professional?"\uE70E":"\uE70D";
+        AutomationProperties.SetName(ExpandButton,T(professional?"CollapseAutomation":"ExpandAutomation"));
+        ToolTipService.SetToolTip(ExpandButton,T(professional?"CollapseAutomation":"ExpandAutomation"));
         ApplyCapabilityPresentation();
     }
 
-    private void ExperienceModeButton_Click(object sender,RoutedEventArgs e)
+    private void ExpandButton_Click(object sender,RoutedEventArgs e)
     {
         if (!CanPersistSettings)
         {
             ShowCorruptSettingsWarning();
             return;
         }
-        var mode=ExperienceModeButton.IsChecked==true
-            ?ExperienceMode.Professional
-            :ExperienceMode.Simple;
+        var mode=_featureSettings.ExperienceMode==ExperienceMode.Professional
+            ?ExperienceMode.Simple
+            :ExperienceMode.Professional;
         ApplyExperienceMode(mode);
         TrySaveSettings(_featureSettings);
     }
@@ -146,7 +148,6 @@ public sealed partial class MainWindow
     {
         ApplyExperienceMode(settings.ExperienceMode);
         AutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;LiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
-        OverflowAutoQuickToggle.IsChecked=settings.AutoSwitchEnabled;OverflowLiveQuickToggle.IsChecked=settings.RealTimeMonitoringEnabled;
         if(!settings.TemperatureProtectionEnabled){_temperatureProtectionActive=false;_handlingTemperature=false;}
     }
 
@@ -278,7 +279,8 @@ public sealed partial class MainWindow
         }
         _capabilityPresentationLifetime.Dispose();
         _hardwareCapabilityService?.Dispose();
-        DpiAwareWindowSizer.SavePlacement(this);
+        if (_isPinned)
+            DpiAwareWindowSizer.SavePlacement(this);
         CleanupNativeFeatures();
     }
 
@@ -296,7 +298,20 @@ public sealed partial class MainWindow
     private IntPtr WindowSubclassProc(IntPtr hwnd,uint msg,IntPtr wParam,IntPtr lParam,UIntPtr id,UIntPtr data)
     {
         if(msg==WmHotkey){var mode=wParam.ToInt32() switch{1=>"remote",2=>"saver",3=>"balanced",4=>"high",_=>string.Empty};if(mode.Length>0)DispatcherQueue.TryEnqueue(()=>_=RunModeWithContextAsync(mode,new SwitchRequestContext("hotkey",AllowPreview:false)));return IntPtr.Zero;}
-        if(msg==WmTray){var action=(uint)(lParam.ToInt64()&0xFFFF);if(action==WmLButtonDblClk)DispatcherQueue.TryEnqueue(ShowFromTray);else if(action==WmRButtonUp)DispatcherQueue.TryEnqueue(ShowTrayMenu);return IntPtr.Zero;}
+        if(msg==WmTray)
+        {
+            var action=(uint)(lParam.ToInt64()&0xFFFF);
+            var trayAction=action switch
+            {
+                WmLButtonUp=>_trayClickFilter.OnLeftButtonUp(Environment.TickCount64),
+                WmLButtonDblClk=>_trayClickFilter.OnDoubleClick(Environment.TickCount64),
+                _=>TrayClickAction.None
+            };
+            if(trayAction==TrayClickAction.Toggle)DispatcherQueue.TryEnqueue(ToggleFlyoutFromTray);
+            else if(trayAction==TrayClickAction.Show)DispatcherQueue.TryEnqueue(ShowFromTray);
+            else if(action==WmRButtonUp)DispatcherQueue.TryEnqueue(ShowTrayMenu);
+            return IntPtr.Zero;
+        }
         return Native.DefSubclassProc(hwnd,msg,wParam,lParam);
     }
     private Native.NotifyIconData CreateTrayData()=>new(){cbSize=(uint)Marshal.SizeOf<Native.NotifyIconData>(),hWnd=_hwnd,uID=1,uFlags=1|2|4,uCallbackMessage=WmTray,hIcon=Native.LoadIcon(IntPtr.Zero,(IntPtr)32512),szTip="PowerMode"};
@@ -305,7 +320,7 @@ public sealed partial class MainWindow
     {
         if(!_featureSettings.NotificationsEnabled||!_trayAdded)return;var data=CreateTrayData();data.uFlags=0x10;data.szInfoTitle=title;data.szInfo=message;data.dwInfoFlags=1;Native.Shell_NotifyIcon(1,ref data);
     }
-    private void ShowFromTray(){AppWindow.Show();if(AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p)p.Restore();Activate();}
+    private void ShowFromTray()=>ShowFlyout(fromTray:true);
     private void ShowTrayMenu()
     {
         var menu=Native.CreatePopupMenu();Native.AppendMenu(menu,0,1,"Remote");Native.AppendMenu(menu,0,2,"Saver");Native.AppendMenu(menu,0,3,"Balanced");Native.AppendMenu(menu,0,4,"High performance");Native.AppendMenu(menu,0x800,0,null);Native.AppendMenu(menu,0,10,"Show PowerMode");Native.AppendMenu(menu,0,11,"Exit");Native.GetCursorPos(out var point);Native.SetForegroundWindow(_hwnd);var command=Native.TrackPopupMenu(menu,0x100|0x2,point.X,point.Y,0,_hwnd,IntPtr.Zero);Native.DestroyMenu(menu);
@@ -452,19 +467,11 @@ public sealed partial class MainWindow
     }
     private void AutoQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.AutoSwitchEnabled=AutoQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"自动切换已{(_featureSettings.AutoSwitchEnabled?"开启":"关闭")}"):($"Automatic switching {(_featureSettings.AutoSwitchEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
     private void LiveQuickToggle_Click(object sender,RoutedEventArgs e){if(!CanPersistSettings){ShowCorruptSettingsWarning();return;}_featureSettings.RealTimeMonitoringEnabled=LiveQuickToggle.IsChecked==true;TrySaveSettings(_featureSettings);ApplyFeatureSettings(_featureSettings);StatusText.Text=IsChinese?($"实时监控已{(_featureSettings.RealTimeMonitoringEnabled?"开启":"关闭")}"):($"Live monitoring {(_featureSettings.RealTimeMonitoringEnabled?"enabled":"disabled")}");StatusBar.Severity=InfoBarSeverity.Success;}
-    private void OverflowAutoQuickToggle_Click(object sender,RoutedEventArgs e)
-    {
-        AutoQuickToggle.IsChecked=OverflowAutoQuickToggle.IsChecked;
-        AutoQuickToggle_Click(sender,e);
-    }
-    private void OverflowLiveQuickToggle_Click(object sender,RoutedEventArgs e)
-    {
-        LiveQuickToggle.IsChecked=OverflowLiveQuickToggle.IsChecked;
-        LiveQuickToggle_Click(sender,e);
-    }
+    private void ExitMenuItem_Click(object sender,RoutedEventArgs e)=>Close();
 
     private async void RootGrid_KeyDown(object sender,KeyRoutedEventArgs e)
     {
+        if(e.Key==VirtualKey.Escape&&!_isPinned){e.Handled=true;HideFlyout();return;}
         var focused=FocusManager.GetFocusedElement(RootGrid.XamlRoot);if(focused is TextBox or NumberBox)return;var mode=e.Key switch{VirtualKey.Number1 or VirtualKey.NumberPad1=>"remote",VirtualKey.Number2 or VirtualKey.NumberPad2=>"saver",VirtualKey.Number3 or VirtualKey.NumberPad3=>"balanced",VirtualKey.Number4 or VirtualKey.NumberPad4=>"high",_=>string.Empty};if(mode.Length>0){e.Handled=true;await RunModeAsync(mode);}
     }
 
@@ -509,7 +516,7 @@ public sealed partial class MainWindow
             WifiOnButton,policy[CapabilityFeature.WifiControl]);
         ApplyCapabilityPresentation(
             RemoteNoWifiButton,policy[CapabilityFeature.WifiControl]);
-        ApplyResponsiveLayout(RootGrid.ActualWidth,RootGrid.ActualHeight);
+        ReflowMetrics();
         _settingsWindow?.ApplyCapabilityPresentation(
             _featureSettings.ExperienceMode,_hardwareCapabilities);
     }

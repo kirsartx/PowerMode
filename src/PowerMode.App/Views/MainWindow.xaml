@@ -4,299 +4,303 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="PowerMode">
     <Window.SystemBackdrop><MicaBackdrop Kind="Base"/></Window.SystemBackdrop>
-    <Grid x:Name="RootGrid" Padding="28,22" RowSpacing="18" UseLayoutRounding="True" SizeChanged="RootGrid_SizeChanged" KeyDown="RootGrid_KeyDown">
+    <Grid x:Name="RootGrid" Padding="14,6,14,10" RowSpacing="10" UseLayoutRounding="True" KeyDown="RootGrid_KeyDown" SizeChanged="FlyoutSection_SizeChanged">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <Border Width="38" Height="38" CornerRadius="10" Background="{ThemeResource AccentFillColorSecondaryBrush}">
-                    <FontIcon Glyph="&#xE945;" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel>
-                    <TextBlock Text="PowerMode" Style="{ThemeResource TitleTextBlockStyle}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock x:Name="SubtitleText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="·" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                        <TextBlock x:Name="LastUpdatedText" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                    </StackPanel>
+        <Grid x:Name="HeaderGrid" ColumnSpacing="4" SizeChanged="FlyoutSection_SizeChanged">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="36"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Grid x:Name="HeaderDragRegion" Grid.ColumnSpan="2" Background="Transparent">
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE945;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                    <TextBlock Text="PowerMode" FontFamily="{StaticResource AppDisplayFontFamily}" FontSize="14" FontWeight="SemiBold"/>
                 </StackPanel>
+            </Grid>
+            <StackPanel x:Name="HeaderStatusPanel" Grid.Row="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <TextBlock x:Name="ModeValue" Text="—" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" TextTrimming="CharacterEllipsis" MaxWidth="150"/>
+                <TextBlock Text="·" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                <TextBlock x:Name="LastUpdatedText" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                <ToggleButton x:Name="ExperienceModeButton"
-                              Click="ExperienceModeButton_Click"
-                              AutomationProperties.Name="切换简单或专业模式">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE713;"/>
-                        <TextBlock x:Name="ExperienceModeText"/>
-                    </StackPanel>
-                </ToggleButton>
-                <StackPanel x:Name="ProfessionalQuickActions" Orientation="Horizontal" Spacing="8">
-                    <ToggleButton x:Name="AutoQuickToggle" Click="AutoQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE945;"/><TextBlock x:Name="AutoQuickText"/></StackPanel></ToggleButton>
-                    <ToggleButton x:Name="LiveQuickToggle" Click="LiveQuickToggle_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D9;"/><TextBlock x:Name="LiveQuickText"/></StackPanel></ToggleButton>
-                    <Button x:Name="RefreshButton" IsTabStop="True" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click">
-                        <Button.KeyboardAccelerators>
-                            <KeyboardAccelerator x:Name="RefreshKeyboardAccelerator" Key="F5" Invoked="RefreshKeyboardAccelerator_Invoked"/>
-                        </Button.KeyboardAccelerators>
-                        <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;"/><ProgressRing x:Name="RefreshProgressRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="RefreshButtonText"/></StackPanel>
-                    </Button>
-                    <Button x:Name="FeaturesButton" Click="FeaturesButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE713;"/><TextBlock x:Name="FeaturesButtonText"/></StackPanel></Button>
-                    <Button x:Name="InsightsButton" Click="InsightsButton_Click"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D2;"/><TextBlock x:Name="InsightsButtonText"/></StackPanel></Button>
-                </StackPanel>
-                <Button x:Name="MoreButton" Visibility="Collapsed">
-                    <FontIcon Glyph="&#xE712;"/>
+            <StackPanel x:Name="HeaderActions" Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                <Button x:Name="RefreshButton" Style="{StaticResource HeaderIconButtonStyle}" IsTabStop="True" AutomationProperties.AcceleratorKey="F5" Click="RefreshButton_Click">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator x:Name="RefreshKeyboardAccelerator" Key="F5" Invoked="RefreshKeyboardAccelerator_Invoked"/>
+                    </Button.KeyboardAccelerators>
+                    <Grid>
+                        <FontIcon x:Name="RefreshIcon" Glyph="&#xE72C;" FontSize="14"/>
+                        <ProgressRing x:Name="RefreshProgressRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
+                    </Grid>
+                </Button>
+                <Button x:Name="PinButton" Style="{StaticResource HeaderIconButtonStyle}" Click="PinButton_Click">
+                    <FontIcon x:Name="PinIcon" Glyph="&#xE718;" FontSize="14"/>
+                </Button>
+                <Button x:Name="MoreButton" Style="{StaticResource HeaderIconButtonStyle}">
+                    <FontIcon Glyph="&#xE712;" FontSize="14"/>
                     <Button.Flyout>
-                        <MenuFlyout>
-                            <ToggleMenuFlyoutItem x:Name="OverflowAutoQuickToggle" Click="OverflowAutoQuickToggle_Click"/>
-                            <ToggleMenuFlyoutItem x:Name="OverflowLiveQuickToggle" Click="OverflowLiveQuickToggle_Click"/>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <MenuFlyoutItem x:Name="FeaturesButton" Click="FeaturesButton_Click"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="InsightsButton" Click="InsightsButton_Click"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D2;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="RecoveryCenterButton" Click="OpenRecoveryCenterButton_Click"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE777;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
                             <MenuFlyoutSeparator/>
-                            <MenuFlyoutItem x:Name="OverflowFeaturesMenuItem" Click="FeaturesButton_Click"/>
-                            <MenuFlyoutItem x:Name="OverflowInsightsMenuItem" Click="InsightsButton_Click"/>
+                            <MenuFlyoutItem x:Name="LanguageButton" Click="LanguageButton_Click"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C1;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutSeparator/>
+                            <MenuFlyoutItem x:Name="ExitMenuItem" Click="ExitMenuItem_Click"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7E8;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
-                <Button x:Name="RecoveryCenterButton" Click="OpenRecoveryCenterButton_Click">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE777;"/>
-                        <TextBlock x:Name="RecoveryCenterButtonText"/>
-                    </StackPanel>
-                </Button>
-                <Button x:Name="LanguageButton" Click="LanguageButton_Click">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8C1;"/>
-                        <TextBlock x:Name="LanguageButtonText"/>
-                    </StackPanel>
-                </Button>
             </StackPanel>
         </Grid>
 
-        <ScrollViewer x:Name="AdaptiveContentScrollViewer"
+        <ScrollViewer x:Name="ContentScrollViewer"
                       Grid.Row="1"
-                      VerticalScrollMode="Disabled"
-                      VerticalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto"
                       HorizontalScrollMode="Disabled"
                       HorizontalScrollBarVisibility="Disabled"
-                      HorizontalContentAlignment="Stretch"
-                      VerticalContentAlignment="Stretch"
                       ZoomMode="Disabled">
-            <Grid x:Name="AdaptiveContentGrid" RowSpacing="18">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-        <Grid x:Name="StatusCardsGrid" Grid.Row="0" ColumnSpacing="10" RowSpacing="10">
-            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-            <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-            <Border x:Name="ModeStatusCard" Grid.Row="0" Grid.Column="0" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE8D7;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="ModeTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="ModeValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
-            <Border x:Name="GpuStatusCard" Grid.Row="0" Grid.Column="1" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE7F8;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="GpuTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="GpuValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
-            <Border x:Name="PowerStatusCard" Grid.Row="0" Grid.Column="2" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE83E;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="PowerTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="PowerValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
-            <Border x:Name="CpuStatusCard" Grid.Row="1" Grid.Column="0" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE950;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="CpuTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="CpuValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
-            <Border x:Name="BrightnessStatusCard" Grid.Row="1" Grid.Column="1" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE706;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="BrightnessTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="BrightnessValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
-            <Border x:Name="SleepStatusCard" Grid.Row="1" Grid.Column="2" Style="{StaticResource StatusCardStyle}"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE708;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1"><TextBlock x:Name="SleepTitle" Style="{StaticResource CardLabelStyle}"/><TextBlock x:Name="SleepValue" Text="—" Style="{StaticResource CardValueStyle}"/></StackPanel></Grid></Border>
-        </Grid>
-
-        <Grid x:Name="MainContentGrid" Grid.Row="1" ColumnSpacing="16" RowSpacing="0">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="0"/></Grid.RowDefinitions>
-            <Border x:Name="ModePanel" Style="{StaticResource PanelStyle}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Spacing="10">
-                        <TextBlock x:Name="ModesTitle" Style="{ThemeResource SubtitleTextBlockStyle}"/>
-                        <TextBlock x:Name="ModesHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
-                        <Border x:Name="RecommendationCard"
-                                Style="{StaticResource PanelStyle}"
-                                Padding="14"
-                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}">
-                            <Grid x:Name="RecommendationLayoutGrid" ColumnSpacing="12" RowSpacing="10">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="0"/>
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <FontIcon Glyph="&#xE946;"
-                                          VerticalAlignment="Center"
-                                          Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-                                <StackPanel Grid.Column="1" Spacing="3">
-                                    <TextBlock x:Name="RecommendationTitle"
-                                               Style="{ThemeResource BodyStrongTextBlockStyle}"
-                                               TextWrapping="Wrap"/>
-                                    <TextBlock x:Name="RecommendationReason"
-                                               TextWrapping="Wrap"
-                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                               AutomationProperties.LiveSetting="Polite"/>
-                                </StackPanel>
-                                <Button x:Name="ApplyRecommendationButton"
-                                        Grid.Column="2"
-                                        VerticalAlignment="Center"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Click="ApplyRecommendationButton_Click"/>
-                            </Grid>
-                        </Border>
-                        <Grid x:Name="ModeButtonsGrid" ColumnSpacing="8" RowSpacing="8">
-                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                            <Button x:Name="RemoteButton" AutomationProperties.AcceleratorKey="1" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" MinHeight="64" Click="RemoteButton_Click">
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <FontIcon Glyph="&#xE8AF;"/>
-                                    <StackPanel Grid.Column="1"><TextBlock x:Name="RemoteButtonText" FontWeight="SemiBold"/><TextBlock x:Name="RemoteDescription" FontSize="12" Opacity="0.72"/></StackPanel>
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                        <FontIcon x:Name="RemoteCheckIcon" Glyph="&#xE73E;" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
-                                        <Border x:Name="RemoteCurrentBadge" Visibility="Collapsed" CornerRadius="9" Padding="7,2" BorderThickness="1" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"><TextBlock x:Name="RemoteCurrentBadgeText" FontSize="11" FontWeight="SemiBold"/></Border>
-                                        <ProgressRing x:Name="RemoteProgressRing" Width="18" Height="18" IsActive="False" Visibility="Collapsed"/>
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="3" Text="1" Opacity="0.55" FontSize="12" VerticalAlignment="Center"/>
-                                </Grid>
-                            </Button>
-                            <Button x:Name="SaverButton" AutomationProperties.AcceleratorKey="2" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch" MinHeight="64" Click="SaverButton_Click">
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <FontIcon Glyph="&#xE8BE;"/>
-                                    <StackPanel Grid.Column="1"><TextBlock x:Name="SaverButtonText" FontWeight="SemiBold"/><TextBlock x:Name="SaverDescription" FontSize="12" Opacity="0.72"/></StackPanel>
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                        <FontIcon x:Name="SaverCheckIcon" Glyph="&#xE73E;" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
-                                        <Border x:Name="SaverCurrentBadge" Visibility="Collapsed" CornerRadius="9" Padding="7,2" BorderThickness="1" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"><TextBlock x:Name="SaverCurrentBadgeText" FontSize="11" FontWeight="SemiBold"/></Border>
-                                        <ProgressRing x:Name="SaverProgressRing" Width="18" Height="18" IsActive="False" Visibility="Collapsed"/>
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="3" Text="2" Opacity="0.55" FontSize="12" VerticalAlignment="Center"/>
-                                </Grid>
-                            </Button>
-                            <Button x:Name="BalancedButton" AutomationProperties.AcceleratorKey="3" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Stretch" MinHeight="64" Click="BalancedButton_Click">
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <FontIcon Glyph="&#xE9E9;"/>
-                                    <StackPanel Grid.Column="1"><TextBlock x:Name="BalancedButtonText" FontWeight="SemiBold"/><TextBlock x:Name="BalancedDescription" FontSize="12" Opacity="0.72"/></StackPanel>
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                        <FontIcon x:Name="BalancedCheckIcon" Glyph="&#xE73E;" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
-                                        <Border x:Name="BalancedCurrentBadge" Visibility="Collapsed" CornerRadius="9" Padding="7,2" BorderThickness="1" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"><TextBlock x:Name="BalancedCurrentBadgeText" FontSize="11" FontWeight="SemiBold"/></Border>
-                                        <ProgressRing x:Name="BalancedProgressRing" Width="18" Height="18" IsActive="False" Visibility="Collapsed"/>
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="3" Text="3" Opacity="0.55" FontSize="12" VerticalAlignment="Center"/>
-                                </Grid>
-                            </Button>
-                            <Button x:Name="HighButton" AutomationProperties.AcceleratorKey="4" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" MinHeight="64" Click="HighButton_Click">
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <FontIcon Glyph="&#xE945;"/>
-                                    <StackPanel Grid.Column="1"><TextBlock x:Name="HighButtonText" FontWeight="SemiBold"/><TextBlock x:Name="HighDescription" FontSize="12" Opacity="0.72"/></StackPanel>
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                        <FontIcon x:Name="HighCheckIcon" Glyph="&#xE73E;" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
-                                        <Border x:Name="HighCurrentBadge" Visibility="Collapsed" CornerRadius="9" Padding="7,2" BorderThickness="1" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"><TextBlock x:Name="HighCurrentBadgeText" FontSize="11" FontWeight="SemiBold"/></Border>
-                                        <ProgressRing x:Name="HighProgressRing" Width="18" Height="18" IsActive="False" Visibility="Collapsed"/>
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="3" Text="4" Opacity="0.55" FontSize="12" VerticalAlignment="Center"/>
-                                </Grid>
-                            </Button>
-                        </Grid>
-                        <StackPanel x:Name="ProfessionalModeControls" Spacing="10">
-                            <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,6"/>
-                            <TextBlock x:Name="CustomCpuTitle" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
-                            <TextBlock x:Name="CpuHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                            <Grid ColumnSpacing="10">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="72"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <Slider x:Name="CpuSlider" Minimum="20" Maximum="50" Value="28" StepFrequency="1" ValueChanged="CpuSlider_ValueChanged"/>
-                                <NumberBox x:Name="CpuBox" Grid.Column="1" Minimum="20" Maximum="50" Value="28" SpinButtonPlacementMode="Compact" ValueChanged="CpuBox_ValueChanged"/>
-                                <TextBlock Grid.Column="2" Text="%" VerticalAlignment="Center"/>
-                            </Grid>
-                            <Button x:Name="RemoteCustomButton" HorizontalAlignment="Stretch" Click="RemoteCustomButton_Click"/>
-                            <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,6"/>
-                            <TextBlock x:Name="AdvancedTitle" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                            <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                                <Button x:Name="VerifyButton" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" Click="VerifyButton_Click"/>
-                                <Button x:Name="RepairButton" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch" Click="RepairButton_Click"/>
-                                <Button x:Name="WifiOnButton" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Stretch" Click="WifiOnButton_Click"/>
-                                <Button x:Name="RemoteNoWifiButton" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Click="RemoteNoWifiButton_Click"/>
-                            </Grid>
-                            <TextBlock x:Name="CliPathText" Foreground="{ThemeResource TextFillColorTertiaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                        </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
-
-            <Border x:Name="ProfessionalLogPanel" Grid.Column="1" Style="{StaticResource PanelStyle}">
-                <Grid RowSpacing="12">
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                    <Grid>
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock x:Name="LogTitle" Style="{ThemeResource SubtitleTextBlockStyle}"/>
-                            <StackPanel Orientation="Horizontal" Spacing="5">
-                                <TextBlock x:Name="LogHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                                <TextBlock Text="·" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                                <TextBlock x:Name="LogStatsText" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                            </StackPanel>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                            <ToggleButton x:Name="AutoScrollToggle" IsChecked="True" Padding="10,6"><StackPanel Orientation="Horizontal" Spacing="5"><FontIcon Glyph="&#xE74A;" FontSize="12"/><TextBlock x:Name="AutoScrollText"/></StackPanel></ToggleButton>
-                            <Button x:Name="CopyLogButton" Padding="10,6" IsEnabled="False" Click="CopyLogButton_Click"><StackPanel Orientation="Horizontal" Spacing="5"><FontIcon Glyph="&#xE8C8;" FontSize="12"/><TextBlock x:Name="CopyLogText"/></StackPanel></Button>
-                            <Button x:Name="ClearLogButton" Padding="10,6" IsEnabled="False" Click="ClearLogButton_Click"><StackPanel Orientation="Horizontal" Spacing="5"><FontIcon Glyph="&#xE74D;" FontSize="12"/><TextBlock x:Name="ClearLogText"/></StackPanel></Button>
-                        </StackPanel>
-                    </Grid>
-                    <TextBox x:Name="LogBox" Grid.Row="1" IsReadOnly="True" IsSpellCheckEnabled="False" AcceptsReturn="True" TextWrapping="NoWrap" FontSize="14" Foreground="{ThemeResource TextFillColorPrimaryBrush}" Background="{ThemeResource ControlFillColorDefaultBrush}" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8" Padding="14,12" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
-                </Grid>
-            </Border>
-        </Grid>
-            </Grid>
-        </ScrollViewer>
-
-        <InfoBar x:Name="StatusBar"
-                 Grid.Row="2"
-                 IsOpen="True"
-                 IsClosable="True"
-                 Severity="Informational"
-                 Closed="StatusBar_Closed">
-            <InfoBar.Content>
-                <Grid ColumnSpacing="12" RowSpacing="8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="130"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="StatusText"
-                               VerticalAlignment="Center"
-                               TextWrapping="Wrap"
-                               AutomationProperties.LiveSetting="Polite"/>
-                    <Button x:Name="StatusActionButton"
-                            Grid.Column="1"
-                            Visibility="Collapsed"
-                            Click="StatusActionButton_Click"/>
-                    <ProgressBar x:Name="BusyProgress"
-                                 Grid.Column="2"
-                                 IsIndeterminate="True"
-                                 Visibility="Collapsed"
-                                 VerticalAlignment="Center"/>
-                    <Grid Grid.Row="1" Grid.ColumnSpan="3" ColumnSpacing="8">
+            <StackPanel x:Name="FlyoutContent" Spacing="10" VerticalAlignment="Top" SizeChanged="FlyoutSection_SizeChanged">
+                <Border x:Name="RecommendationCard"
+                        Visibility="Collapsed"
+                        CornerRadius="8"
+                        Padding="10,8"
+                        BorderThickness="1"
+                        BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                    <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="ModeSwitchDiagnosticText"
-                                   Visibility="Collapsed"
-                                   FontFamily="Cascadia Mono"
-                                   TextWrapping="Wrap"/>
-                        <Button x:Name="CopyModeSwitchDiagnosticButton"
-                                Grid.Column="1"
-                                Content="Copy"
-                                Visibility="Collapsed"
-                                Click="CopyModeSwitchDiagnosticButton_Click"/>
+                        <FontIcon Glyph="&#xE946;" FontSize="14" VerticalAlignment="Center" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                        <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="RecommendationTitle" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="RecommendationReason"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       AutomationProperties.LiveSetting="Polite"/>
+                        </StackPanel>
+                        <HyperlinkButton x:Name="ApplyRecommendationButton"
+                                         Grid.Column="2"
+                                         VerticalAlignment="Center"
+                                         Padding="6,2"
+                                         FontWeight="SemiBold"
+                                         Click="ApplyRecommendationButton_Click"/>
                     </Grid>
+                </Border>
+
+                <Grid x:Name="ModeButtonsGrid" ColumnSpacing="6" RowSpacing="6">
+                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <Button x:Name="RemoteButton" Style="{StaticResource ModeTileStyle}" AutomationProperties.AcceleratorKey="1" Click="RemoteButton_Click">
+                        <Grid RowSpacing="2" ColumnSpacing="6">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE8AF;" FontSize="14" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="RemoteButtonText" Grid.Column="1" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon x:Name="RemoteCheckIcon" Glyph="&#xE73E;" FontSize="12" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
+                                <Border x:Name="RemoteCurrentBadge" Visibility="Collapsed"><TextBlock x:Name="RemoteCurrentBadgeText" FontSize="11"/></Border>
+                                <ProgressRing x:Name="RemoteProgressRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
+                                <TextBlock Text="1" FontSize="11" Opacity="0.5"/>
+                            </StackPanel>
+                            <TextBlock x:Name="RemoteDescription" Grid.Row="1" Grid.ColumnSpan="3" FontSize="12" Opacity="0.72" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="SaverButton" Grid.Column="1" Style="{StaticResource ModeTileStyle}" AutomationProperties.AcceleratorKey="2" Click="SaverButton_Click">
+                        <Grid RowSpacing="2" ColumnSpacing="6">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE8BE;" FontSize="14" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SaverButtonText" Grid.Column="1" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon x:Name="SaverCheckIcon" Glyph="&#xE73E;" FontSize="12" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
+                                <Border x:Name="SaverCurrentBadge" Visibility="Collapsed"><TextBlock x:Name="SaverCurrentBadgeText" FontSize="11"/></Border>
+                                <ProgressRing x:Name="SaverProgressRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
+                                <TextBlock Text="2" FontSize="11" Opacity="0.5"/>
+                            </StackPanel>
+                            <TextBlock x:Name="SaverDescription" Grid.Row="1" Grid.ColumnSpan="3" FontSize="12" Opacity="0.72" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="BalancedButton" Grid.Row="1" Style="{StaticResource ModeTileStyle}" AutomationProperties.AcceleratorKey="3" Click="BalancedButton_Click">
+                        <Grid RowSpacing="2" ColumnSpacing="6">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE9E9;" FontSize="14" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="BalancedButtonText" Grid.Column="1" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon x:Name="BalancedCheckIcon" Glyph="&#xE73E;" FontSize="12" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
+                                <Border x:Name="BalancedCurrentBadge" Visibility="Collapsed"><TextBlock x:Name="BalancedCurrentBadgeText" FontSize="11"/></Border>
+                                <ProgressRing x:Name="BalancedProgressRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
+                                <TextBlock Text="3" FontSize="11" Opacity="0.5"/>
+                            </StackPanel>
+                            <TextBlock x:Name="BalancedDescription" Grid.Row="1" Grid.ColumnSpan="3" FontSize="12" Opacity="0.72" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="HighButton" Grid.Row="1" Grid.Column="1" Style="{StaticResource ModeTileStyle}" AutomationProperties.AcceleratorKey="4" Click="HighButton_Click">
+                        <Grid RowSpacing="2" ColumnSpacing="6">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE945;" FontSize="14" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="HighButtonText" Grid.Column="1" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon x:Name="HighCheckIcon" Glyph="&#xE73E;" FontSize="12" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw"/>
+                                <Border x:Name="HighCurrentBadge" Visibility="Collapsed"><TextBlock x:Name="HighCurrentBadgeText" FontSize="11"/></Border>
+                                <ProgressRing x:Name="HighProgressRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
+                                <TextBlock Text="4" FontSize="11" Opacity="0.5"/>
+                            </StackPanel>
+                            <TextBlock x:Name="HighDescription" Grid.Row="1" Grid.ColumnSpan="3" FontSize="12" Opacity="0.72" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
                 </Grid>
-            </InfoBar.Content>
-        </InfoBar>
+
+                <Border x:Name="MetricsCard" Style="{StaticResource FlyoutCardStyle}">
+                    <Grid x:Name="MetricsGrid" ColumnSpacing="8" RowSpacing="10">
+                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <StackPanel x:Name="CpuStatusCard"><TextBlock x:Name="CpuTitle" Style="{StaticResource MetricLabelStyle}"/><TextBlock x:Name="CpuValue" Text="—" Style="{StaticResource MetricValueStyle}"/></StackPanel>
+                        <StackPanel x:Name="BrightnessStatusCard" Grid.Column="1"><TextBlock x:Name="BrightnessTitle" Style="{StaticResource MetricLabelStyle}"/><TextBlock x:Name="BrightnessValue" Text="—" Style="{StaticResource MetricValueStyle}"/></StackPanel>
+                        <StackPanel x:Name="PowerStatusCard" Grid.Column="2"><TextBlock x:Name="PowerTitle" Style="{StaticResource MetricLabelStyle}"/><TextBlock x:Name="PowerValue" Text="—" Style="{StaticResource MetricValueStyle}"/></StackPanel>
+                        <StackPanel x:Name="GpuStatusCard" Grid.Row="1"><TextBlock x:Name="GpuTitle" Style="{StaticResource MetricLabelStyle}"/><TextBlock x:Name="GpuValue" Text="—" Style="{StaticResource MetricValueStyle}"/></StackPanel>
+                        <StackPanel x:Name="SleepStatusCard" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"><TextBlock x:Name="SleepTitle" Style="{StaticResource MetricLabelStyle}"/><TextBlock x:Name="SleepValue" Text="—" Style="{StaticResource MetricValueStyle}"/></StackPanel>
+                    </Grid>
+                </Border>
+
+                <Grid x:Name="QuickTogglesGrid" ColumnSpacing="6">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <ToggleButton x:Name="AutoQuickToggle" Style="{StaticResource PillToggleStyle}" Click="AutoQuickToggle_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE945;" FontSize="12"/><TextBlock x:Name="AutoQuickText" FontSize="12"/></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="LiveQuickToggle" Grid.Column="1" Style="{StaticResource PillToggleStyle}" Click="LiveQuickToggle_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE9D9;" FontSize="12"/><TextBlock x:Name="LiveQuickText" FontSize="12"/></StackPanel>
+                    </ToggleButton>
+                </Grid>
+
+                <StackPanel x:Name="ProfessionalModeControls" Spacing="8" Visibility="Collapsed">
+                    <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,2"/>
+                    <TextBlock x:Name="CustomCpuTitle" Style="{StaticResource SectionLabelStyle}"/>
+                    <TextBlock x:Name="CpuHintText" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="72"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Slider x:Name="CpuSlider" Minimum="20" Maximum="50" Value="28" StepFrequency="1" VerticalAlignment="Center" ValueChanged="CpuSlider_ValueChanged"/>
+                        <NumberBox x:Name="CpuBox" Grid.Column="1" Minimum="20" Maximum="50" Value="28" SpinButtonPlacementMode="Compact" ValueChanged="CpuBox_ValueChanged"/>
+                        <TextBlock Grid.Column="2" Text="%" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Button x:Name="RemoteCustomButton" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" Click="RemoteCustomButton_Click"/>
+                    <TextBlock x:Name="AdvancedTitle" Style="{StaticResource SectionLabelStyle}" Margin="0,4,0,0"/>
+                    <Grid ColumnSpacing="6" RowSpacing="6">
+                        <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                        <Button x:Name="VerifyButton" HorizontalAlignment="Stretch" Click="VerifyButton_Click"/>
+                        <Button x:Name="RepairButton" Grid.Column="1" HorizontalAlignment="Stretch" Click="RepairButton_Click"/>
+                        <Button x:Name="WifiOnButton" Grid.Row="1" HorizontalAlignment="Stretch" Click="WifiOnButton_Click"/>
+                        <Button x:Name="RemoteNoWifiButton" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Click="RemoteNoWifiButton_Click"/>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel x:Name="ProfessionalLogPanel" Spacing="6" Visibility="Collapsed">
+                    <Grid ColumnSpacing="6">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock x:Name="LogTitle" Style="{StaticResource SectionLabelStyle}"/>
+                            <TextBlock x:Name="LogStatsText" FontSize="11" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                            <ToggleButton x:Name="AutoScrollToggle" IsChecked="True" Padding="8,3"><StackPanel Orientation="Horizontal" Spacing="4"><FontIcon Glyph="&#xE74A;" FontSize="11"/><TextBlock x:Name="AutoScrollText" FontSize="11"/></StackPanel></ToggleButton>
+                            <Button x:Name="CopyLogButton" Padding="8,3" IsEnabled="False" Click="CopyLogButton_Click"><StackPanel Orientation="Horizontal" Spacing="4"><FontIcon Glyph="&#xE8C8;" FontSize="11"/><TextBlock x:Name="CopyLogText" FontSize="11"/></StackPanel></Button>
+                            <Button x:Name="ClearLogButton" Padding="8,3" IsEnabled="False" Click="ClearLogButton_Click"><StackPanel Orientation="Horizontal" Spacing="4"><FontIcon Glyph="&#xE74D;" FontSize="11"/><TextBlock x:Name="ClearLogText" FontSize="11"/></StackPanel></Button>
+                        </StackPanel>
+                    </Grid>
+                    <TextBox x:Name="LogBox" Height="160" IsReadOnly="True" IsSpellCheckEnabled="False" AcceptsReturn="True" TextWrapping="NoWrap" FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" Background="{ThemeResource ControlFillColorDefaultBrush}" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6" Padding="10,8" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                    <TextBlock x:Name="CliPathText" Foreground="{ThemeResource TextFillColorTertiaryBrush}" FontSize="11" TextWrapping="Wrap"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border x:Name="FooterBorder" Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" Padding="0,6,0,0" SizeChanged="FlyoutSection_SizeChanged">
+            <Grid ColumnSpacing="6">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <InfoBar x:Name="StatusBar"
+                         IsOpen="True"
+                         IsClosable="False"
+                         Severity="Informational"
+                         Padding="0"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         Closed="StatusBar_Closed">
+                    <InfoBar.Resources>
+                        <x:Double x:Key="InfoBarMinHeight">32</x:Double>
+                        <SolidColorBrush x:Key="InfoBarInformationalSeverityBackgroundBrush" Color="Transparent"/>
+                        <SolidColorBrush x:Key="InfoBarSuccessSeverityBackgroundBrush" Color="Transparent"/>
+                        <SolidColorBrush x:Key="InfoBarWarningSeverityBackgroundBrush" Color="Transparent"/>
+                        <SolidColorBrush x:Key="InfoBarErrorSeverityBackgroundBrush" Color="Transparent"/>
+                        <SolidColorBrush x:Key="InfoBarBorderBrush" Color="Transparent"/>
+                        <Thickness x:Key="InfoBarIconMargin">0,8,8,8</Thickness>
+                        <Thickness x:Key="InfoBarContentRootPadding">0,0,0,0</Thickness>
+                    </InfoBar.Resources>
+                    <InfoBar.Content>
+                        <Grid ColumnSpacing="8" RowSpacing="4" Padding="0,6,0,6">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="StatusText"
+                                           FontSize="12"
+                                           VerticalAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite"/>
+                                <ProgressBar x:Name="BusyProgress" IsIndeterminate="True" Visibility="Collapsed"/>
+                            </StackPanel>
+                            <HyperlinkButton x:Name="StatusActionButton"
+                                             Grid.Column="1"
+                                             Padding="6,2"
+                                             FontSize="12"
+                                             VerticalAlignment="Center"
+                                             Visibility="Collapsed"
+                                             Click="StatusActionButton_Click"/>
+                            <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="ModeSwitchDiagnosticText"
+                                           Visibility="Collapsed"
+                                           FontFamily="Cascadia Mono"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"/>
+                                <HyperlinkButton x:Name="CopyModeSwitchDiagnosticButton"
+                                                 Grid.Column="1"
+                                                 Content="Copy"
+                                                 Padding="6,2"
+                                                 FontSize="11"
+                                                 Visibility="Collapsed"
+                                                 Click="CopyModeSwitchDiagnosticButton_Click"/>
+                            </Grid>
+                        </Grid>
+                    </InfoBar.Content>
+                </InfoBar>
+                <HyperlinkButton x:Name="ExpandButton" Grid.Column="1" VerticalAlignment="Top" Margin="0,4,0,0" Padding="6,4" Click="ExpandButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock x:Name="ExpandText" FontSize="12" FontWeight="SemiBold"/>
+                        <FontIcon x:Name="ExpandIcon" Glyph="&#xE70D;" FontSize="10"/>
+                    </StackPanel>
+                </HyperlinkButton>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

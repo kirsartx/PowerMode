@@ -755,11 +755,12 @@ public sealed partial class MainWindow
         ApplyModeButtonPresentation(activeProjection.ModeButtons);
         if (_currentRecommendation is not { } recommendation ||
             activeProjection.Recommendation is not { } applyState ||
+            string.Equals(recommendation.Mode, _activeModeKey, StringComparison.OrdinalIgnoreCase) ||
             RecommendationTitle is null ||
             RecommendationReason is null ||
             ApplyRecommendationButton is null)
         {
-            // Nothing to suggest yet: hide the whole card instead of leaving an empty box.
+            // Nothing to suggest, or already in the suggested mode: hide the hint entirely.
             if (RecommendationCard is not null)
                 RecommendationCard.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             return;

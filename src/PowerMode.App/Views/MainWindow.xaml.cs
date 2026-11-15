@@ -163,276 +163,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ConfigureWindow()
-    {
-        if(!DpiAwareWindowSizer.TryRestore(
-            this,
-            (int)ResponsiveLayoutPolicy.MinimumWidth,
-            (int)ResponsiveLayoutPolicy.MinimumHeight))
-        {
-            DpiAwareWindowSizer.Resize(
-                this,
-                (int)ResponsiveLayoutPolicy.DefaultWidth,
-                (int)ResponsiveLayoutPolicy.DefaultHeight,
-                (int)ResponsiveLayoutPolicy.MinimumWidth,
-                (int)ResponsiveLayoutPolicy.MinimumHeight,
-                center:true);
-        }
-    }
-
-    private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        ApplyResponsiveLayout(e.NewSize.Width,e.NewSize.Height);
-    }
-
-    private void ApplyResponsiveLayout(double logicalWidth,double logicalHeight)
-    {
-        if (!double.IsFinite(logicalWidth) || logicalWidth <= 0)
-            logicalWidth = ResponsiveLayoutPolicy.DefaultWidth;
-        if (!double.IsFinite(logicalHeight) || logicalHeight <= 0)
-            logicalHeight = ResponsiveLayoutPolicy.DefaultHeight;
-
-        var statusCards=GetStatusCardElements();
-        var visibleCards=statusCards
-            .Where(item=>item.Element.Visibility==Visibility.Visible)
-            .Select(item=>item.Card)
-            .ToArray();
-        var projection=ResponsiveLayoutPolicy.Project(
-            logicalWidth,
-            logicalHeight,
-            _featureSettings.ExperienceMode,
-            visibleCards);
-        var layout=projection.Layout;
-        RootGrid.Padding=layout.Tier switch
-        {
-            LayoutTier.Narrow=>new Thickness(16,14,16,14),
-            LayoutTier.Medium=>new Thickness(20,18,20,18),
-            _=>new Thickness(28,22,28,22)
-        };
-
-        ApplyToolbarDisplay(
-            ExperienceModeButton,
-            ExperienceModeText,
-            layout.Toolbar[ToolbarAction.Experience]);
-        ApplyToolbarDisplay(
-            AutoQuickToggle,
-            AutoQuickText,
-            layout.Toolbar[ToolbarAction.Auto]);
-        ApplyToolbarDisplay(
-            LiveQuickToggle,
-            LiveQuickText,
-            layout.Toolbar[ToolbarAction.Live]);
-        ApplyToolbarDisplay(
-            RefreshButton,
-            RefreshButtonText,
-            layout.Toolbar[ToolbarAction.Refresh]);
-        ApplyToolbarDisplay(
-            FeaturesButton,
-            FeaturesButtonText,
-            layout.Toolbar[ToolbarAction.Features]);
-        ApplyToolbarDisplay(
-            InsightsButton,
-            InsightsButtonText,
-            layout.Toolbar[ToolbarAction.Insights]);
-        ApplyToolbarDisplay(
-            RecoveryCenterButton,
-            RecoveryCenterButtonText,
-            layout.Toolbar[ToolbarAction.Recovery]);
-        ApplyToolbarDisplay(
-            LanguageButton,
-            LanguageButtonText,
-            layout.Toolbar[ToolbarAction.Language]);
-        MoreButton.Visibility = projection.ShowToolbarOverflow
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-
-        ApplyRowDefinitions(RootGrid,projection.RootRows);
-        ApplyRowDefinitions(AdaptiveContentGrid,projection.ContentRows);
-        AdaptiveContentScrollViewer.VerticalScrollMode=
-            projection.EnableVerticalContentScroll
-                ? ScrollMode.Enabled
-                : ScrollMode.Disabled;
-        AdaptiveContentScrollViewer.VerticalScrollBarVisibility=
-            projection.EnableVerticalContentScroll
-                ? ScrollBarVisibility.Auto
-                : ScrollBarVisibility.Disabled;
-
-        ReflowVisibleStatusCards(projection,statusCards);
-        ReflowModeButtons(projection);
-        ApplyMainContentLayout(projection);
-        ApplyRecommendationLayout(projection.StackRecommendationContent);
-    }
-
-    private static void ApplyToolbarDisplay(
-        UIElement control,
-        UIElement label,
-        ToolbarDisplay display)
-    {
-        control.Visibility = display is ToolbarDisplay.Hidden or ToolbarDisplay.Overflow
-            ? Visibility.Collapsed
-            : Visibility.Visible;
-        label.Visibility = display == ToolbarDisplay.Full
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-    }
-
-    private (StatusCardId Card,FrameworkElement Element)[] GetStatusCardElements() =>
-    [
-        (StatusCardId.Mode,ModeStatusCard),
-        (StatusCardId.Gpu,GpuStatusCard),
-        (StatusCardId.Power,PowerStatusCard),
-        (StatusCardId.Cpu,CpuStatusCard),
-        (StatusCardId.Brightness,BrightnessStatusCard),
-        (StatusCardId.Sleep,SleepStatusCard)
-    ];
-
-    private void ReflowVisibleStatusCards(
-        ResponsiveDashboardProjection projection,
-        IReadOnlyList<(StatusCardId Card,FrameworkElement Element)> cards)
-    {
-        StatusCardsGrid.ColumnDefinitions.Clear();
-        for (var column=0;column<projection.Layout.StatusCardColumns;column++)
-        {
-            StatusCardsGrid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-        }
-        StatusCardsGrid.RowDefinitions.Clear();
-        for(var row=0;row<projection.StatusCardRows;row++)
-            StatusCardsGrid.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
-
-        foreach(var placement in projection.StatusCards)
-        {
-            var element=cards.Single(item=>item.Card==placement.Card).Element;
-            Grid.SetRow(element,placement.Row);
-            Grid.SetColumn(element,placement.Column);
-        }
-    }
-
-    private void ReflowModeButtons(ResponsiveDashboardProjection projection)
-    {
-        var buttons=new (StandardModeButtonId Id,FrameworkElement Element)[]
-        {
-            (StandardModeButtonId.Remote,RemoteButton),
-            (StandardModeButtonId.Saver,SaverButton),
-            (StandardModeButtonId.Balanced,BalancedButton),
-            (StandardModeButtonId.High,HighButton)
-        };
-        ModeButtonsGrid.ColumnDefinitions.Clear();
-        for(var column=0;column<projection.ModeButtonColumns;column++)
-        {
-            ModeButtonsGrid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width=new GridLength(1,GridUnitType.Star)
-            });
-        }
-        ModeButtonsGrid.RowDefinitions.Clear();
-        var rowCount=projection.ModeButtons.Max(item=>item.Row)+1;
-        for(var row=0;row<rowCount;row++)
-            ModeButtonsGrid.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
-        foreach(var placement in projection.ModeButtons)
-        {
-            var element=buttons.Single(item=>item.Id==placement.Button).Element;
-            Grid.SetRow(element,placement.Row);
-            Grid.SetColumn(element,placement.Column);
-        }
-    }
-
-    private void ApplyMainContentLayout(ResponsiveDashboardProjection projection)
-    {
-        var layout=projection.Layout;
-        var professional = _featureSettings.ExperienceMode == ExperienceMode.Professional;
-        ProfessionalLogPanel.Visibility = professional
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        ProfessionalLogPanel.MinHeight = layout.ProfessionalLogMinimumHeight;
-        ApplyColumnDefinitions(MainContentGrid,projection.MainColumns);
-        ApplyRowDefinitions(MainContentGrid,projection.MainRows);
-
-        Grid.SetColumn(ModePanel, 0);
-        Grid.SetRow(ModePanel, 0);
-        if (layout.ModePanelUsesContentHeight)
-        {
-            MainContentGrid.ColumnSpacing = 0;
-            MainContentGrid.RowSpacing = 0;
-            MainContentGrid.VerticalAlignment = VerticalAlignment.Top;
-            ModePanel.VerticalAlignment = VerticalAlignment.Top;
-            return;
-        }
-
-        MainContentGrid.VerticalAlignment = VerticalAlignment.Stretch;
-        ModePanel.VerticalAlignment = VerticalAlignment.Stretch;
-        if (layout.StackMainContent)
-        {
-            MainContentGrid.ColumnSpacing = 0;
-            MainContentGrid.RowSpacing = 16;
-            Grid.SetColumn(ProfessionalLogPanel, 0);
-            Grid.SetRow(ProfessionalLogPanel, 1);
-            return;
-        }
-
-        MainContentGrid.ColumnSpacing = 16;
-        MainContentGrid.RowSpacing = 0;
-        Grid.SetColumn(ProfessionalLogPanel, 1);
-        Grid.SetRow(ProfessionalLogPanel, 0);
-    }
-
-    private static void ApplyRowDefinitions(
-        Grid grid,
-        IReadOnlyList<GridLengthProjection> definitions)
-    {
-        grid.RowDefinitions.Clear();
-        foreach(var definition in definitions)
-            grid.RowDefinitions.Add(new RowDefinition{Height=ToGridLength(definition)});
-    }
-
-    private static void ApplyColumnDefinitions(
-        Grid grid,
-        IReadOnlyList<GridLengthProjection> definitions)
-    {
-        grid.ColumnDefinitions.Clear();
-        foreach(var definition in definitions)
-            grid.ColumnDefinitions.Add(new ColumnDefinition{Width=ToGridLength(definition)});
-    }
-
-    private static GridLength ToGridLength(GridLengthProjection definition)=>
-        definition.Kind switch
-        {
-            GridLengthProjectionKind.Auto=>GridLength.Auto,
-            GridLengthProjectionKind.Star=>new GridLength(
-                definition.Value,
-                GridUnitType.Star),
-            _=>new GridLength(definition.Value)
-        };
-
-    private void ApplyRecommendationLayout(bool stack)
-    {
-        RecommendationLayoutGrid.RowDefinitions[1].Height = stack
-            ? GridLength.Auto
-            : new GridLength(0);
-        Grid.SetRow(ApplyRecommendationButton, stack ? 1 : 0);
-        Grid.SetColumn(ApplyRecommendationButton, stack ? 0 : 2);
-        Grid.SetColumnSpan(ApplyRecommendationButton, stack ? 3 : 1);
-        ApplyRecommendationButton.HorizontalAlignment = stack
-            ? HorizontalAlignment.Stretch
-            : HorizontalAlignment.Right;
-        ApplyRecommendationButton.Margin = stack
-            ? new Thickness(0, 4, 0, 0)
-            : new Thickness(0);
-    }
-
     internal string T(string key) => MainWindowStrings.ForLanguage(_language).TryGetValue(key, out var value) ? value : key;
     internal bool IsChinese => _language == "zh";
 
     private void ApplyLanguage()
     {
-        SubtitleText.Text=T("Subtitle"); RefreshButtonText.Text=T("Refresh"); FeaturesButtonText.Text=T("Features");InsightsButtonText.Text=T("Insights");RecoveryCenterButtonText.Text=T("RecoveryCenter"); LanguageButtonText.Text=T("Language");LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
+        LastUpdatedText.Text=string.Format(T("LastUpdated"),"—");
         AutoQuickText.Text=T("Auto");LiveQuickText.Text=T("Live");
-        OverflowAutoQuickToggle.Text=T("Auto");OverflowLiveQuickToggle.Text=T("Live");OverflowFeaturesMenuItem.Text=T("Features");OverflowInsightsMenuItem.Text=T("Insights");
-        AutomationProperties.SetName(ExperienceModeButton,T("ExperienceModeAutomation"));AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(FeaturesButton,T("Features"));AutomationProperties.SetName(InsightsButton,T("Insights"));AutomationProperties.SetName(RecoveryCenterButton,T("RecoveryCenter"));AutomationProperties.SetName(LanguageButton,T("Language"));AutomationProperties.SetName(MoreButton,T("More"));
-        ModeTitle.Text=T("Mode"); GpuTitle.Text=T("Gpu"); PowerTitle.Text=T("Power"); CpuTitle.Text=T("Cpu"); BrightnessTitle.Text=T("Brightness"); SleepTitle.Text=T("Sleep");
-        ModesTitle.Text=T("Modes"); ModesHintText.Text=T("ModesHint"); RemoteButtonText.Text=T("Remote"); SaverButtonText.Text=T("Saver"); BalancedButtonText.Text=T("Balanced"); HighButtonText.Text=T("High");
+        FeaturesButton.Text=T("Features");InsightsButton.Text=T("Insights");RecoveryCenterButton.Text=T("RecoveryCenter");LanguageButton.Text=T("Language");ExitMenuItem.Text=T("Exit");
+        AutomationProperties.SetName(RefreshButton,T("Refresh"));AutomationProperties.SetName(MoreButton,T("More"));
+        GpuTitle.Text=T("Gpu"); PowerTitle.Text=T("Power"); CpuTitle.Text=T("Cpu"); BrightnessTitle.Text=T("Brightness"); SleepTitle.Text=T("Sleep");
+        RemoteButtonText.Text=T("Remote"); SaverButtonText.Text=T("Saver"); BalancedButtonText.Text=T("Balanced"); HighButtonText.Text=T("High");
         RemoteDescription.Text=T("RemoteDesc");SaverDescription.Text=T("SaverDesc");BalancedDescription.Text=T("BalancedDesc");HighDescription.Text=T("HighDesc");
         AutomationProperties.SetName(RemoteButton,T("Remote"));AutomationProperties.SetHelpText(RemoteButton,T("RemoteDesc"));
         AutomationProperties.SetName(SaverButton,T("Saver"));AutomationProperties.SetHelpText(SaverButton,T("SaverDesc"));
@@ -441,9 +182,9 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(AutoQuickToggle,T("Auto"));AutomationProperties.SetName(LiveQuickToggle,T("Live"));
         CustomCpuTitle.Text=T("CustomCpu"); CpuHintText.Text=T("CpuHint"); RemoteCustomButton.Content=T("RemoteCustom"); AdvancedTitle.Text=T("Advanced");
         VerifyButton.Content=T("Verify"); RepairButton.Content=T("Repair"); WifiOnButton.Content=T("WifiOn"); RemoteNoWifiButton.Content=T("RemoteNoWifi");
-        LogTitle.Text=T("Log"); LogHintText.Text=T("LogHint"); AutoScrollText.Text=T("AutoScroll"); CopyLogText.Text=T("Copy"); ClearLogText.Text=T("Clear"); StatusText.Text=T("Ready"); CliPathText.Text=string.Format(T("CliPath"),_cliPath); UpdateLogStats();
+        LogTitle.Text=T("Log"); ToolTipService.SetToolTip(LogTitle,T("LogHint")); AutoScrollText.Text=T("AutoScroll"); CopyLogText.Text=T("Copy"); ClearLogText.Text=T("Clear"); StatusText.Text=T("Ready"); CliPathText.Text=string.Format(T("CliPath"),_cliPath); UpdateLogStats();
         LogBox.FontFamily=new FontFamily(_language=="zh"?"Microsoft YaHei UI":"Cascadia Mono");
-        LogBox.FontSize=_language=="zh"?13.5:14;
+        LogBox.FontSize=12;
         AutomationProperties.SetHelpText(RefreshButton, _language == "zh" ? "重新读取状态（只读，F5）" : "Reload status (read-only, F5)");
         ToolTipService.SetToolTip(RefreshButton, _language == "zh" ? "重新读取状态（F5）" : "Reload status (F5)");
         ToolTipService.SetToolTip(AutoQuickToggle,_language=="zh"?"根据电源和运行程序自动切换":"Switch automatically based on power and running apps");
@@ -451,8 +192,9 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(FeaturesButton,_language=="zh"?"打开自动化、托盘和保护设置":"Open automation, tray and protection settings");
         ToolTipService.SetToolTip(InsightsButton,_language=="zh"?"查看硬件监控和系统洞察":"View hardware monitoring and system insights");
         ToolTipService.SetToolTip(RecoveryCenterButton,_language=="zh"?"撤销模式操作或安全恢复配置":"Undo a mode operation or safely restore configuration");
-        ToolTipService.SetToolTip(MoreButton,_language=="zh"?"显示更多专业操作":"Show more professional actions");
+        ToolTipService.SetToolTip(MoreButton,_language=="zh"?"功能中心、洞察、恢复与语言":"Features, insights, recovery and language");
         ToolTipService.SetToolTip(LanguageButton,_language=="zh"?"切换到 English":"Switch to Chinese");
+        ApplyPinPresentation();
         ToolTipService.SetToolTip(CopyLogButton,_language=="zh"?"复制本次会话日志":"Copy this session log");
         ToolTipService.SetToolTip(ClearLogButton,_language=="zh"?"清空本次会话日志":"Clear this session log");
         ToolTipService.SetToolTip(RemoteButton,_language=="zh"?"切换到远程推荐（快捷键 1）":"Switch to Remote (shortcut 1)");
@@ -751,12 +493,22 @@ public sealed partial class MainWindow : Window
             item.BadgeText.Text=state.BadgeText;
             item.Progress.IsActive=state.ShowProgress;
             item.Progress.Visibility=state.ShowProgress?Visibility.Visible:Visibility.Collapsed;
-            if(state.IsCurrent)
-            {
-                button.Background=(Brush)Application.Current.Resources["AccentFillColorSecondaryBrush"];
-            }
-            else button.ClearValue(Control.BackgroundProperty);
-            button.ClearValue(Control.ForegroundProperty);
+            var style=(Style)Application.Current.Resources[state.IsCurrent?"ModeTileCurrentStyle":"ModeTileStyle"];
+            if(!ReferenceEquals(button.Style,style))button.Style=style;
+        }
+    }
+
+    private void ReflowMetrics()
+    {
+        var cells=new FrameworkElement[]{CpuStatusCard,BrightnessStatusCard,PowerStatusCard,GpuStatusCard,SleepStatusCard}
+            .Where(cell=>cell.Visibility==Visibility.Visible)
+            .ToArray();
+        for(var index=0;index<cells.Length;index++)
+        {
+            var column=index%3;
+            Grid.SetRow(cells[index],index/3);
+            Grid.SetColumn(cells[index],column);
+            Grid.SetColumnSpan(cells[index],index==cells.Length-1?3-column:1);
         }
     }
 
