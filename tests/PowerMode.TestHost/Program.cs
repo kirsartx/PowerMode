@@ -100,12 +100,16 @@ public static class Program
                 return 0;
 
             case "/query":
+            case "/qh":
                 var guid = args[1].ToLowerInvariant();
                 var subgroup = args[2];
                 var settingName = args[3];
                 var ac = GetValue(values, Key(guid, subgroup, settingName, "ac"));
                 var dc = GetValue(values, Key(guid, subgroup, settingName, "dc"));
                 Console.WriteLine($"Power Scheme GUID: {guid}");
+                // Like real powercfg, /query omits hidden settings such as processor boost mode.
+                if (command == "/query" && HiddenSettings.Contains(settingName))
+                    return 0;
                 Console.WriteLine($"  Subgroup GUID: {subgroup}");
                 Console.WriteLine($"    Power Setting GUID: {settingName}");
                 Console.WriteLine($"      Current AC Power Setting Index: 0x{ac:X}");
@@ -131,6 +135,12 @@ public static class Program
                 return 2;
         }
     }
+
+    private static readonly HashSet<string> HiddenSettings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "be337238-0d82-4146-a960-4f3749d470c7",
+        "PERFBOOSTMODE"
+    };
 
     private static int GetValue(
         JsonObject values,

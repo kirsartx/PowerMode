@@ -472,7 +472,8 @@ function Get-PowerSettingAcValue {
         [bool]$Critical = $true
     )
 
-    $result = Invoke-PowerCfg -Arguments @('/query', $Guid, $Subgroup, $Setting) -StepName $StepName -Critical $Critical
+    # /query omits hidden settings such as processor boost mode; /qh includes them.
+    $result = Invoke-PowerCfg -Arguments @('/qh', $Guid, $Subgroup, $Setting) -StepName $StepName -Critical $Critical
     $rawText = $result.StandardOutput
 
     if ($rawText -match '当前交流电源设置索引:\s+0x([0-9a-fA-F]+)') {
@@ -500,7 +501,8 @@ function Get-PowerSettingDcValue {
         [bool]$Critical = $true
     )
 
-    $result = Invoke-PowerCfg -Arguments @('/query', $Guid, $Subgroup, $Setting) -StepName $StepName -Critical $Critical
+    # /query omits hidden settings such as processor boost mode; /qh includes them.
+    $result = Invoke-PowerCfg -Arguments @('/qh', $Guid, $Subgroup, $Setting) -StepName $StepName -Critical $Critical
     $rawText = $result.StandardOutput
 
     if ($rawText -match '当前直流电源设置索引:\s+0x([0-9a-fA-F]+)') {
