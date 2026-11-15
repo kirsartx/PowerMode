@@ -80,7 +80,7 @@ internal sealed class LastOperationStore : ILastOperationStore
         PropertyNameCaseInsensitive = true,
         Converters =
         {
-            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)
+            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false)
         }
     };
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(
@@ -272,6 +272,8 @@ internal sealed class LastOperationStore : ILastOperationStore
                 : CustomProfile is not null
                     ? PowerModeTarget.ForCustom(CustomProfile)
                     : PowerModeTarget.ForPreset(ParsePreset(Preset));
+            if (Rollback?.Operation is { } rollbackOperation)
+                ValidateOperation(rollbackOperation);
             return new(
                 SchemaVersion,
                 OperationId,
@@ -285,6 +287,24 @@ internal sealed class LastOperationStore : ILastOperationStore
                 Status,
                 Outcome,
                 Rollback);
+        }
+
+        // JSON deserialization does not enforce non-nullable reference members.
+        private static void ValidateOperation(BackendOperationResult operation)
+        {
+            if (string.IsNullOrWhiteSpace(operation.Action))
+                throw new JsonException("Rollback operation action is required.");
+            if (operation.Duration < TimeSpan.Zero)
+                throw new JsonException("Rollback operation duration is invalid.");
+            if (operation.Steps is null ||
+                operation.Steps.Any(step => step is null || string.IsNullOrWhiteSpace(step.Name)))
+                throw new JsonException("Rollback operation steps are invalid.");
+            if (operation.Expectations is null ||
+                operation.Expectations.Any(expectation => expectation is null))
+                throw new JsonException("Rollback operation expectations are invalid.");
+            if (operation.ProcessDiagnostics is { } diagnostics &&
+                (diagnostics.StandardOutput is null || diagnostics.StandardError is null))
+                throw new JsonException("Rollback process output fields are required.");
         }
 
         private static PowerModePreset ParsePreset(string? value) =>

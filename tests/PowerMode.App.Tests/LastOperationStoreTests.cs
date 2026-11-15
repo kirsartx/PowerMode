@@ -118,6 +118,51 @@ public sealed class LastOperationStoreTests
         Assert.Equal(JournalRecords.State, actual.Record!.Target.Snapshot);
     }
 
+    [Fact]
+    public async Task WriteAsync_RoundTripsRollbackOperationDetails()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new LastOperationStore(
+            Path.Combine(directory.Path, "last-operation.json"));
+        var operation = JournalRecords.RollbackOperation();
+        var expected = JournalRecords.Verified(Guid.NewGuid()) with
+        {
+            Rollback = new RollbackResult(true, false, operation)
+        };
+
+        Assert.True((await store.WriteAsync(expected)).Succeeded);
+        var actual = await store.ReadAsync();
+
+        Assert.Null(actual.Error);
+        var restored = actual.Record!.Rollback!.Operation!;
+        Assert.Equal(operation.Duration, restored.Duration);
+        Assert.Equal(operation.Outcome, restored.Outcome);
+        Assert.Equal(operation.Steps, restored.Steps);
+        Assert.Equal(operation.Expectations, restored.Expectations);
+        Assert.Equal(operation.ProcessDiagnostics, restored.ProcessDiagnostics);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RollbackOperationWithNullStepsReturnsError()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "last-operation.json");
+        var store = new LastOperationStore(path);
+        var record = JournalRecords.Verified(Guid.NewGuid()) with
+        {
+            Rollback = new RollbackResult(true, false, JournalRecords.RollbackOperation())
+        };
+        Assert.True((await store.WriteAsync(record)).Succeeded);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        json["rollback"]!["operation"]!["steps"] = null;
+        File.WriteAllText(path, json.ToJsonString());
+
+        var actual = await store.ReadAsync();
+
+        Assert.Null(actual.Record);
+        Assert.NotNull(actual.Error);
+    }
+
     private static class JournalRecords
     {
         public static PowerModeState State => new(
@@ -160,6 +205,20 @@ public sealed class LastOperationStoreTests
                 Status = LastOperationStatus.Verified,
                 Outcome = ModeSwitchOutcome.Succeeded
             };
+
+        public static BackendOperationResult RollbackOperation() => new(
+            Guid.NewGuid(),
+            "restore",
+            "snapshot",
+            new DateTimeOffset(2026, 8, 9, 0, 0, 1, TimeSpan.Zero),
+            TimeSpan.FromTicks(12_345_678),
+            BackendOperationOutcome.Partial,
+            State,
+            State,
+            [new BackendStepResult("Set active scheme", true, 0, false, null)],
+            [new VerificationExpectation(PowerModeStateField.CpuMaximumAcPercent, "100", true)],
+            null,
+            new BackendProcessDiagnostics("{}", "warn", null, 0, false, false));
     }
 
     private sealed class CancellingAtomicFileOperations : IAtomicFileOperations
