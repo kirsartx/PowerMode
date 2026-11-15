@@ -126,4 +126,60 @@ public sealed class PowerModeEngineContractTests
                 new CustomPowerProfileSnapshot(
                     " ", 50, 50, 5, 50, 50, 60, 60, true)));
     }
+
+    [Theory]
+    [InlineData("\"critical\": false", "\"critical\": null")]
+    [InlineData("\"field\": \"brightnessAcPercent\"", "\"field\": null")]
+    public void Parse_NestedRequiredMemberMissing_ReturnsInvalidResponse(
+        string expected, string replacement)
+    {
+        var json = TestPaths.ReadFixture("engine-partial-v1.json")
+            .Replace(expected, replacement, StringComparison.Ordinal);
+
+        Assert.Equal(BackendOperationOutcome.InvalidResponse,
+            PowerModeEngineContract.Parse(json).Outcome);
+    }
+
+    [Fact]
+    public void Parse_DurationOverflow_ReturnsInvalidResponse()
+    {
+        var json = TestPaths.ReadFixture("engine-status-v1.json")
+            .Replace("\"durationMs\": 125", "\"durationMs\": 9223372036854775807",
+                StringComparison.Ordinal);
+
+        Assert.Equal(BackendOperationOutcome.InvalidResponse,
+            PowerModeEngineContract.Parse(json).Outcome);
+    }
+
+    [Fact]
+    public void Parse_NullStep_ReturnsInvalidResponse()
+    {
+        var json = TestPaths.ReadFixture("engine-status-v1.json")
+            .Replace("\"steps\": []", "\"steps\": [null]", StringComparison.Ordinal);
+
+        Assert.Equal(BackendOperationOutcome.InvalidResponse,
+            PowerModeEngineContract.Parse(json).Outcome);
+    }
+
+    [Fact]
+    public void Parse_NullExpectation_ReturnsInvalidResponse()
+    {
+        var json = TestPaths.ReadFixture("engine-status-v1.json")
+            .Replace("\"expectations\": []", "\"expectations\": [null]",
+                StringComparison.Ordinal);
+
+        Assert.Equal(BackendOperationOutcome.InvalidResponse,
+            PowerModeEngineContract.Parse(json).Outcome);
+    }
+
+    [Fact]
+    public void Parse_StateWithoutPowerSource_ReturnsInvalidResponse()
+    {
+        var json = TestPaths.ReadFixture("engine-status-v1.json")
+            .Replace("    \"powerSource\": \"ac\",\n", string.Empty,
+                StringComparison.Ordinal);
+
+        Assert.Equal(BackendOperationOutcome.InvalidResponse,
+            PowerModeEngineContract.Parse(json).Outcome);
+    }
 }
