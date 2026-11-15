@@ -118,6 +118,22 @@ public sealed class SettingsWindowPresentationTests
         Assert.Empty(Regex.Matches(source, @"SettingsStore\.Save\s*\(").Cast<Match>());
     }
 
+    [Fact]
+    public void SettingsWindow_SetsRangeBaseLimitsAfterXamlLoad()
+    {
+        var xaml = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "SettingsWindow.xaml"));
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "SettingsWindow.xaml.cs"));
+
+        Assert.DoesNotContain("Minimum=", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Maximum=", xaml, StringComparison.Ordinal);
+        Assert.Contains("ConfigureInputRanges();", source, StringComparison.Ordinal);
+        Assert.Contains("SetRange(DisplayOffBox, 0, 86400, 60);", source, StringComparison.Ordinal);
+        Assert.Contains("SetRange(BatteryDisplayBox, 0, 86400, 120);", source, StringComparison.Ordinal);
+        Assert.Contains("SetRange(TemperatureLimitBox, 50, 110, 90);", source, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(759, true)]
     [InlineData(760, false)]

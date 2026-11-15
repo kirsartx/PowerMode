@@ -53,6 +53,7 @@ public sealed partial class SettingsWindow : Window
             async () => (await SaveAsync()).Succeeded);
 
         InitializeComponent();
+        ConfigureInputRanges();
         DpiAwareWindowSizer.Resize(this, 760, 680, 680, 580);
         ApplyLanguage();
         InitializeRuleEditor();
@@ -67,6 +68,71 @@ public sealed partial class SettingsWindow : Window
             AppWindow.Closing -= SettingsWindow_Closing;
             _systemIntegration.Dispose();
         };
+    }
+
+    // WinUI applies RangeBase.Minimum and Value during XAML parse against the
+    // control's default 0–100 range, which terminates the process. Set the real
+    // range only after the control exists: raise the ceiling, assign the value,
+    // then apply the floor.
+    private void ConfigureInputRanges()
+    {
+        SetRange(CpuMaxSlider, 20, 100, 50);
+        SetRange(BrightnessSlider, 10, 100, 50);
+        SetRange(CpuMinBox, 0, 100, 5);
+        SetRange(DisplayOffBox, 0, 86400, 60);
+        SetRange(BatteryCpuBox, 5, 100, 35);
+        SetRange(BatteryBrightnessBox, 0, 100, 45);
+        SetRange(BatteryDisplayBox, 0, 86400, 120);
+        SetRange(TemperatureLimitBox, 50, 110, 90);
+        SetRange(TemperatureRecoveryBox, 40, 100, 75);
+        SetRange(LowBatteryBox, 5, 95, 30);
+        SetRange(IntervalBox, 10, 3600, 15);
+        SetRange(BackupCountBox, 1, 50, 10);
+    }
+
+    private static void SetRange(
+        RangeBase control,
+        double minimum,
+        double maximum,
+        double value) =>
+        SetRangeValues(
+            () => control.Maximum,
+            next => control.Maximum = next,
+            next => control.Value = next,
+            next => control.Minimum = next,
+            minimum,
+            maximum,
+            value);
+
+    private static void SetRange(
+        NumberBox control,
+        double minimum,
+        double maximum,
+        double value) =>
+        SetRangeValues(
+            () => control.Maximum,
+            next => control.Maximum = next,
+            next => control.Value = next,
+            next => control.Minimum = next,
+            minimum,
+            maximum,
+            value);
+
+    private static void SetRangeValues(
+        Func<double> readMaximum,
+        Action<double> writeMaximum,
+        Action<double> writeValue,
+        Action<double> writeMinimum,
+        double minimum,
+        double maximum,
+        double value)
+    {
+        var ceiling = Math.Max(maximum, value);
+        if (readMaximum() < ceiling)
+            writeMaximum(ceiling);
+        writeValue(value);
+        writeMinimum(minimum);
+        writeMaximum(maximum);
     }
 
     internal void ApplyCapabilityPresentation(
