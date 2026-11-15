@@ -82,13 +82,14 @@ public sealed class NativePowerStateReaderTests
     }
 
     [Theory]
-    [InlineData(PowerModePreset.Remote, 45, 45)]
-    [InlineData(PowerModePreset.Remote, 10, 32)]
-    [InlineData(PowerModePreset.Remote, 80, 50)]
-    [InlineData(PowerModePreset.Saver, 45, 45)]
-    [InlineData(PowerModePreset.Saver, 10, 30)]
-    public void Applier_CpuMaximum_MatchesPresetLimit(PowerModePreset preset, int requested, int expected)
+    [InlineData("Remote", 45, 45)]
+    [InlineData("Remote", 10, 32)]
+    [InlineData("Remote", 80, 50)]
+    [InlineData("Saver", 45, 45)]
+    [InlineData("Saver", 10, 30)]
+    public void Applier_CpuMaximum_MatchesPresetLimit(string presetName, int requested, int expected)
     {
+        var preset = Enum.Parse<PowerModePreset>(presetName);
         var api = new FakePowerNativeApi { Scheme = NativePowerStateReader.SchemeSaver };
         var applier = new NativePowerApplier(api);
 
