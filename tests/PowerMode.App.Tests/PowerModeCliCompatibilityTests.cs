@@ -324,6 +324,70 @@ public sealed class PowerModeCliCompatibilityTests
     }
 
     [Fact]
+    public async Task Engine_JsonCustomProfile_MissingRequiredFieldFailsBeforeMutation()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var before = File.ReadAllText(state.Path);
+        var profile = Encode("""
+            {
+              "name": "Incomplete",
+              "cpuMaximumAcPercent": 45,
+              "cpuMaximumDcPercent": 35,
+              "cpuMinimumPercent": 5,
+              "brightnessAcPercent": 60,
+              "brightnessDcPercent": 40,
+              "displayTimeoutAcSeconds": 120,
+              "displayTimeoutDcSeconds": 90
+            }
+            """);
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "custom",
+            "-OutputFormat", "Json",
+            "-CustomProfileBase64", profile);
+
+        Assert.NotEqual(0, result.ExitCode);
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        Assert.Equal(BackendOperationOutcome.Failed, contract.Outcome);
+        Assert.Contains(contract.Steps, step =>
+            step.Error?.Contains("disableBoost", StringComparison.Ordinal) == true);
+        Assert.Equal(before, File.ReadAllText(state.Path));
+    }
+
+    [Fact]
+    public async Task Engine_JsonCustomProfile_EnabledBoostOverridesSharedSaverScheme()
+    {
+        using var state = FakePowerState.CreateBalanced();
+        var remote = await RunEngineAsync(state, "-Mode", "remote", "-OutputFormat", "Json");
+        Assert.Equal(0, remote.ExitCode);
+
+        var profile = Encode("""
+            {
+              "name": "Boosted",
+              "cpuMaximumAcPercent": 80,
+              "cpuMaximumDcPercent": 60,
+              "cpuMinimumPercent": 5,
+              "brightnessAcPercent": 60,
+              "brightnessDcPercent": 40,
+              "displayTimeoutAcSeconds": 300,
+              "displayTimeoutDcSeconds": 120,
+              "disableBoost": false
+            }
+            """);
+        var result = await RunEngineAsync(
+            state,
+            "-Mode", "custom",
+            "-OutputFormat", "Json",
+            "-CustomProfileBase64", profile);
+
+        var contract = PowerModeEngineContract.Parse(result.StandardOutput);
+        using var saved = JsonDocument.Parse(File.ReadAllText(state.Path));
+        Assert.Equal(BackendOperationOutcome.Succeeded, contract.Outcome);
+        Assert.Equal(2, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.ProcessorBoost, "ac"));
+        Assert.Equal(2, SavedValue(saved, SaverScheme, KnownPowerSettings.CpuSubgroup, KnownPowerSettings.ProcessorBoost, "dc"));
+    }
+
+    [Fact]
     public async Task Engine_RestoreSnapshot_RestoresActiveSchemeAndMutableFields()
     {
         using var state = FakePowerState.CreateBalanced();

@@ -917,11 +917,9 @@ internal sealed class ModeSwitchCoordinator : IModeSwitchCoordinator
             Add(expectations, PowerModeStateField.CpuMaximumDcPercent, profile.CpuMaximumDcPercent, true);
             Add(expectations, PowerModeStateField.CpuMinimumAcPercent, profile.CpuMinimumPercent, true);
             Add(expectations, PowerModeStateField.CpuMinimumDcPercent, profile.CpuMinimumPercent, true);
-            if (profile.DisableBoost)
-            {
-                Add(expectations, PowerModeStateField.ProcessorBoostModeAc, 0, true);
-                Add(expectations, PowerModeStateField.ProcessorBoostModeDc, 0, true);
-            }
+            var boostMode = profile.DisableBoost ? 0 : 2;
+            Add(expectations, PowerModeStateField.ProcessorBoostModeAc, boostMode, true);
+            Add(expectations, PowerModeStateField.ProcessorBoostModeDc, boostMode, true);
             Add(expectations, PowerModeStateField.BrightnessAcPercent, profile.BrightnessAcPercent, false);
             Add(expectations, PowerModeStateField.BrightnessDcPercent, profile.BrightnessDcPercent, false);
             Add(expectations, PowerModeStateField.DisplayTimeoutAcSeconds, profile.DisplayTimeoutAcSeconds, true);

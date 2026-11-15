@@ -1429,10 +1429,28 @@ function Get-JsonProfileValue {
     return $property.Value
 }
 
+function Test-JsonCustomProfile {
+    param([object]$Profile)
+
+    $required = @(
+        'name', 'cpuMaximumAcPercent', 'cpuMaximumDcPercent', 'cpuMinimumPercent',
+        'brightnessAcPercent', 'brightnessDcPercent',
+        'displayTimeoutAcSeconds', 'displayTimeoutDcSeconds', 'disableBoost'
+    )
+    $missing = @($required | Where-Object { $null -eq (Get-JsonProfileValue $Profile $_) })
+    if ($missing.Count -gt 0) {
+        throw "Custom profile is missing required fields: $($missing -join ', ')"
+    }
+    if ([string]::IsNullOrWhiteSpace([string](Get-JsonProfileValue $Profile 'name'))) {
+        throw 'Custom profile name must not be blank.'
+    }
+}
+
 function Invoke-JsonApplyCustom {
     $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CustomProfileBase64))
     $profile = $json | ConvertFrom-Json
-    $name = [string](Get-JsonProfileValue $profile 'name' (Get-JsonProfileValue $profile 'Name' 'Custom'))
+    Test-JsonCustomProfile $profile
+    $name = [string](Get-JsonProfileValue $profile 'name')
     $cpuMaximumAc = [int](Get-JsonProfileValue $profile 'cpuMaximumAcPercent' 50)
     $cpuMaximumDc = [int](Get-JsonProfileValue $profile 'cpuMaximumDcPercent' 50)
     $cpuMinimum = [int](Get-JsonProfileValue $profile 'cpuMinimumPercent' 5)
@@ -1452,9 +1470,10 @@ function Invoke-JsonApplyCustom {
     Set-PowerValueDc $guid $JsonVideoSubgroup $JsonBrightness $brightnessDc 'brightness-dc' $false
     Set-PowerValue $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeoutAc 'display-timeout' $true
     Set-PowerValueDc $guid $JsonVideoSubgroup $JsonDisplayTimeout $displayTimeoutDc 'display-timeout-dc' $true
-    if ($disableBoost) {
-        Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonBoostMode 0 'processor-boost' $true
-    }
+    # The saver scheme is shared with remote/saver, which disable boost, so always write it.
+    $boostMode = if ($disableBoost) { 0 } else { 2 }
+    Set-JsonPowerValue $guid $JsonCpuSubgroup $JsonBoostMode $boostMode 'processor-boost' $true
+    Set-ActivePlan $guid
 
     Add-JsonExpectation 'activeSchemeId' $guid $true
     Add-JsonExpectation 'cpuMaximumAcPercent' $cpuMaximumAc $true
@@ -1465,10 +1484,8 @@ function Invoke-JsonApplyCustom {
     Add-JsonExpectation 'brightnessDcPercent' $brightnessDc $false
     Add-JsonExpectation 'displayTimeoutAcSeconds' $displayTimeoutAc $true
     Add-JsonExpectation 'displayTimeoutDcSeconds' $displayTimeoutDc $true
-    if ($disableBoost) {
-        Add-JsonExpectation 'processorBoostModeAc' 0 $true
-        Add-JsonExpectation 'processorBoostModeDc' 0 $true
-    }
+    Add-JsonExpectation 'processorBoostModeAc' $boostMode $true
+    Add-JsonExpectation 'processorBoostModeDc' $boostMode $true
 }
 
 function Invoke-JsonRestore {
@@ -1509,6 +1526,7 @@ function Invoke-JsonRestore {
             Add-JsonExpectation $field[0] $value $field[4]
         }
     }
+    if ($guid) { Set-ActivePlan ([string]$guid) }
 
     $wifiDisabled = Get-JsonProfileValue $snapshot 'wifiDisabled'
     if ($null -ne $wifiDisabled) {
