@@ -15,6 +15,8 @@ public sealed partial class SettingsWindow : Window
     private readonly bool _zh;
     private readonly SystemIntegrationService _systemIntegration;
     private readonly SettingsEditSession _editSession;
+    private string _modeBaselineLastMode = "balanced";
+    private string? _modeBaselineCustomProfileName;
     private readonly SettingsCloseCoordinator _closeCoordinator;
     private readonly ProfileDraftSelectionCoordinator _profileSelectionCoordinator = new();
     private bool _loading;
@@ -44,6 +46,8 @@ public sealed partial class SettingsWindow : Window
         _zh = chinese;
         _systemIntegration = new SystemIntegrationService(dataDirectory: SettingsStore.DirectoryPath);
         var openingSnapshot = SettingsStore.Clone(settings);
+        _modeBaselineLastMode = openingSnapshot.LastMode;
+        _modeBaselineCustomProfileName = openingSnapshot.LastCustomProfileName;
         _editSession = new SettingsEditSession(
             openingSnapshot,
             PersistSettingsSnapshotAsync,
@@ -671,14 +675,25 @@ public sealed partial class SettingsWindow : Window
         if (_profileDraftDirty)
             StageProfileDraft();
         CaptureSettingsFromUi();
+        var modeBeforeMerge = _settings.LastMode;
+        var profileBeforeMerge = _settings.LastCustomProfileName;
+        _owner.CopyUneditedLiveModeMemory(
+            _settings,
+            _modeBaselineLastMode,
+            _modeBaselineCustomProfileName);
         var result = await _editSession.SaveAsync();
         if (!result.Succeeded)
         {
+            _settings.LastMode = modeBeforeMerge;
+            _settings.LastCustomProfileName = profileBeforeMerge;
             ShowSaved(
                 result.Error ?? SettingsWindowStrings.SaveFailed(_zh),
                 InfoBarSeverity.Error);
             return result;
         }
+
+        _modeBaselineLastMode = _settings.LastMode;
+        _modeBaselineCustomProfileName = _settings.LastCustomProfileName;
 
         LoadSettings();
         if (createVersionBackup)

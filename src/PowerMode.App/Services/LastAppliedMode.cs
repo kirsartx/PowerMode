@@ -53,4 +53,51 @@ internal static class LastAppliedMode
             preset = "balanced";
         return new(preset, null);
     }
+
+    /// <summary>
+    /// The feature center edits a copy taken when it opened. A mode switch can update
+    /// the live settings before that copy is saved. Keep the live mode memory when the
+    /// editor did not change it; an import that does change it still wins.
+    /// </summary>
+    public static void KeepLiveModeMemoryIfUnedited(
+        PowerModeSettings edited,
+        string? baselineLastMode,
+        string? baselineCustomProfileName,
+        PowerModeSettings live)
+    {
+        ArgumentNullException.ThrowIfNull(edited);
+        ArgumentNullException.ThrowIfNull(live);
+        if (!SameModeMemory(edited.LastMode, edited.LastCustomProfileName, baselineLastMode, baselineCustomProfileName))
+            return;
+        edited.LastMode = live.LastMode;
+        edited.LastCustomProfileName = live.LastCustomProfileName;
+    }
+
+    public static void DropCustomProfileNameMissingFromList(PowerModeSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var name = NormalizeProfileName(settings.LastCustomProfileName);
+        if (name is not null &&
+            settings.Profiles?.Any(profile => string.Equals(profile.Name, name, StringComparison.Ordinal)) == true)
+        {
+            settings.LastCustomProfileName = name;
+            return;
+        }
+
+        settings.LastCustomProfileName = null;
+    }
+
+    private static bool SameModeMemory(
+        string? leftMode,
+        string? leftProfile,
+        string? rightMode,
+        string? rightProfile) =>
+        string.Equals(leftMode?.Trim(), rightMode?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(NormalizeProfileName(leftProfile), NormalizeProfileName(rightProfile), StringComparison.Ordinal);
+
+    private static string? NormalizeProfileName(string? name)
+    {
+        var trimmed = name?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
 }

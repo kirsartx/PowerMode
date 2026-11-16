@@ -125,6 +125,66 @@ public sealed class LastAppliedModeTests
     }
 
     [Fact]
+    public void KeepLiveModeMemory_PreservesSwitchMadeWhileEditorWasOpen()
+    {
+        var edited = new PowerModeSettings
+        {
+            LastMode = "balanced",
+            LastCustomProfileName = null,
+            Profiles = [new CustomPowerProfile { Name = "安静办公" }]
+        };
+        var live = new PowerModeSettings
+        {
+            LastMode = "saver",
+            LastCustomProfileName = "安静办公",
+            Profiles = edited.Profiles
+        };
+
+        LastAppliedMode.KeepLiveModeMemoryIfUnedited(edited, "balanced", null, live);
+        LastAppliedMode.DropCustomProfileNameMissingFromList(edited);
+
+        Assert.Equal("saver", edited.LastMode);
+        Assert.Equal("安静办公", edited.LastCustomProfileName);
+    }
+
+    [Fact]
+    public void KeepLiveModeMemory_ImportThatChangesModeWins()
+    {
+        var edited = new PowerModeSettings
+        {
+            LastMode = "high",
+            LastCustomProfileName = "夜班",
+            Profiles = [new CustomPowerProfile { Name = "夜班" }]
+        };
+        var live = new PowerModeSettings
+        {
+            LastMode = "saver",
+            LastCustomProfileName = "安静办公"
+        };
+
+        LastAppliedMode.KeepLiveModeMemoryIfUnedited(edited, "balanced", null, live);
+
+        Assert.Equal("high", edited.LastMode);
+        Assert.Equal("夜班", edited.LastCustomProfileName);
+    }
+
+    [Fact]
+    public void DropCustomProfileName_ClearsNameDeletedFromTheSavedList()
+    {
+        var settings = new PowerModeSettings
+        {
+            LastMode = "saver",
+            LastCustomProfileName = "已删除",
+            Profiles = [new CustomPowerProfile { Name = "安静办公" }]
+        };
+
+        LastAppliedMode.DropCustomProfileNameMissingFromList(settings);
+
+        Assert.Null(settings.LastCustomProfileName);
+        Assert.Equal("saver", settings.LastMode);
+    }
+
+    [Fact]
     public void StartupAndSuccessPaths_UseLastAppliedMode()
     {
         var source = File.ReadAllText(FindRepositoryFile(
@@ -134,6 +194,10 @@ public sealed class LastAppliedModeTests
         Assert.Contains("LastAppliedMode.RememberCustomProfile(", source);
         Assert.Contains("LastAppliedMode.RememberPreset(", source);
         Assert.DoesNotContain("_featureSettings.LastMode = \"saver\"", source);
+
+        var settingsWindow = File.ReadAllText(FindRepositoryFile(
+            "src", "PowerMode.App", "Views", "SettingsWindow.xaml.cs"));
+        Assert.Contains("CopyUneditedLiveModeMemory(", settingsWindow);
     }
 
     private static string FindRepositoryFile(params string[] path)

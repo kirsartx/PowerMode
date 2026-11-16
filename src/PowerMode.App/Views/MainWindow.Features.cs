@@ -128,6 +128,19 @@ public sealed partial class MainWindow
         TrySaveSettings(_featureSettings);
     }
 
+    internal void CopyUneditedLiveModeMemory(
+        PowerModeSettings edited,
+        string? baselineLastMode,
+        string? baselineCustomProfileName)
+    {
+        LastAppliedMode.KeepLiveModeMemoryIfUnedited(
+            edited,
+            baselineLastMode,
+            baselineCustomProfileName,
+            _featureSettings);
+        LastAppliedMode.DropCustomProfileNameMissingFromList(edited);
+    }
+
     internal void ApplyFeatureSettings(PowerModeSettings settings)
     {
         _featureSettings=settings;
