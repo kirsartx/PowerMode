@@ -18,6 +18,12 @@ public sealed class PowerModeSettings
     public bool ApplyLastModeOnStartup { get; set; }
     public bool PreviewManualSwitches { get; set; }
     public string LastMode { get; set; } = "balanced";
+    /// <summary>
+    /// Name of the custom profile last applied successfully. Empty when the last
+    /// successful switch was a standard preset. Kept separate from <see cref="LastMode"/>
+    /// so existing files and the four-preset contract stay valid.
+    /// </summary>
+    public string? LastCustomProfileName { get; set; }
     public int MonitorIntervalSeconds { get; set; } = 15;
     public bool TemperatureProtectionEnabled { get; set; }
     public double TemperatureLimitCelsius { get; set; } = 90;
@@ -226,6 +232,8 @@ public static class SettingsStore
         settings.ConfigurationBackupCount = Math.Clamp(settings.ConfigurationBackupCount, 1, 50);
         var lastMode=settings.LastMode?.Trim().ToLowerInvariant();
         settings.LastMode = lastMode is "remote" or "saver" or "balanced" or "high" ? lastMode : "balanced";
+        var customProfileName = settings.LastCustomProfileName?.Trim();
+        settings.LastCustomProfileName = string.IsNullOrEmpty(customProfileName) ? null : customProfileName;
         foreach(var profile in settings.Profiles)
         {
             profile.Name=string.IsNullOrWhiteSpace(profile.Name)?"自定义模式":profile.Name.Trim();

@@ -103,6 +103,7 @@ PowerMode/
 - `SettingsStore.Normalize`：
   - 未知 `ExperienceMode` → `Simple`；
   - `LastMode` 仅接受 `remote|saver|balanced|high`，否则 `balanced`；
+  - 上次成功应用的自定义预设记在可选字段 `LastCustomProfileName`，不写入 `LastMode`。字段缺失、空白，或预设已从列表中删除时，启动恢复仍只使用 `LastMode`；
   - 监控间隔下限 10 秒；温度/电量/备份数量等做范围夹取；
   - 规则与预设列表 null 安全处理。
 - **默认体验为简单模式**（`ExperienceMode.Simple`）。

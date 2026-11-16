@@ -84,14 +84,21 @@ public sealed partial class MainWindow
     private async Task ApplyLastModeOnStartupAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_featureSettings.ApplyLastModeOnStartup ||
-            string.IsNullOrWhiteSpace(_featureSettings.LastMode))
+        var selection = LastAppliedMode.SelectForStartup(_featureSettings);
+        if (selection.Profile is { } profile)
+        {
+            await ApplyCustomProfileAsync(profile);
             return;
-        await RunModeWithContextAsync(
-            _featureSettings.LastMode,
-            new SwitchRequestContext(
-                "startup",
-                AllowPreview: false));
+        }
+
+        if (selection.Preset is { } preset)
+        {
+            await RunModeWithContextAsync(
+                preset,
+                new SwitchRequestContext(
+                    "startup",
+                    AllowPreview: false));
+        }
     }
 
     internal void ApplySystemSettings(PowerModeSettings settings)
@@ -640,11 +647,11 @@ public sealed partial class MainWindow
                     _activeModeKey = target.Key;
                     ModeValue.Text = customProfile.Name;
                     RenderRecommendation();
-                    _featureSettings.LastMode = "saver";
+                    LastAppliedMode.RememberCustomProfile(_featureSettings, customProfile);
                 }
                 else
                 {
-                    _featureSettings.LastMode = targetMode;
+                    LastAppliedMode.RememberPreset(_featureSettings, targetMode);
                 }
                 try
                 {
