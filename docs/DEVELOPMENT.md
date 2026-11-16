@@ -46,7 +46,7 @@ External
         └─ PowerModeSwitcher.bat (mode apply & verify)
 ```
 
-GUI 通过缓存后的 CLI 脚本执行模式切换与校验，保证与命令行行为一致。单实例由 `App.xaml.cs` 中命名 Mutex 保证。
+GUI 通过缓存后的 CLI 脚本执行模式切换与校验，保证与命令行行为一致。单实例由 `App.xaml.cs` 中命名 Mutex 保证；第二次启动只激活首个实例登记的主窗口句柄，并核对句柄仍属于该进程。
 
 ### 关键服务职责
 

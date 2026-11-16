@@ -71,7 +71,7 @@ dist\PowerMode-win-x64\
 | `PowerModeSwitcher.bat` | 转发到 `src\PowerMode.Cli\PowerModeSwitcher.bat` |
 | `Build-Portable.bat` | 转发到 `scripts\Build-Portable.bat` / 发布脚本 |
 
-PowerMode 使用单实例互斥：重复启动会唤醒已有窗口，不会创建第二套托盘、热键或自动化循环。支持 `--tray` 启动参数（用于开机启动并最小化到托盘）。
+PowerMode 使用单实例互斥：重复启动会唤醒本进程登记的已有窗口，而不是任意一个标题同为 PowerMode 的窗口，也不会创建第二套托盘、热键或自动化循环。支持 `--tray` 启动参数（用于开机启动并最小化到托盘）。
 
 ## 状态卡片
 
